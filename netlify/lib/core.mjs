@@ -2,7 +2,8 @@
 // deps: { fetch, store (Netlify Blobs-like: get(key,{type:"json"}), setJSON(key,val)), env, now }
 import { createHash } from "node:crypto";
 
-const UA = "Mozilla/5.0 (X11; Linux x86_64) fantasy-news-bot/1.0";
+// NOTE: ESPN answers 403 to any User-Agent containing "bot".
+const UA = "Mozilla/5.0 (X11; Linux x86_64) fantasy-news/1.0";
 const MAX_SEEN = 5000;
 const MAX_AGE_MS = 24 * 3600 * 1000;
 const MAX_ALERTS_PER_RUN = 20;
@@ -79,6 +80,7 @@ export function parseRss(xml, source) {
     return m ? m[1].replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g, "$1").trim() : "";
   };
   return blocks.map((b) => {
+    const strip = (t) => stripHtml(t).replace(/\s*Visit RotoWire\.com for more analysis on this update\.?\s*$/i, "");
     let link = decodeEntities(tag(b, "link"));
     if (!link) { const m = b.match(/<link\b[^>]*href="([^"]+)"/); link = m ? decodeEntities(m[1]) : ""; }
     const title = stripHtml(tag(b, "title"));
@@ -86,7 +88,8 @@ export function parseRss(xml, source) {
       id: tag(b, "guid") || tag(b, "id") || link || title,
       source,
       title,
-      body: stripHtml(tag(b, "description") || tag(b, "summary") || tag(b, "content")),
+      body: strip(tag(b, "description") || tag(b, "summary") || tag(b, "content")),
+      get dedupeText() { return this.body; },
       url: link,
       published: parseDate(tag(b, "pubDate") || tag(b, "published") || tag(b, "updated")),
       names: [],
@@ -94,8 +97,11 @@ export function parseRss(xml, source) {
   });
 }
 
+// ESPN types that are noise for alerts: videos, and game recaps/previews that mention many players.
+const ESPN_SKIP_TYPES = new Set(["Media", "Recap", "Preview"]);
+
 function espnItems(list, source) {
-  return (list || []).map((a) => {
+  return (list || []).filter((a) => !ESPN_SKIP_TYPES.has(a.type)).map((a) => {
     const names = [];
     const ids = [];
     for (const ath of a.athletes || []) {
@@ -124,12 +130,35 @@ function espnItems(list, source) {
   });
 }
 
-export function sourceList(env) {
+// Per-player ESPN fantasy feed: ~10 latest Rotowire blurbs + stories for one player.
+// Rotowire's own RSS only holds the newest 5 items league-wide, so this is the reliable source.
+const MAX_PLAYER_FEEDS = 60;
+async function espnPlayerFeeds(fetch, players) {
+  const tracked = players.filter((p) => p.espnId).slice(0, MAX_PLAYER_FEEDS);
+  if (!tracked.length) return [];
+  const results = await Promise.allSettled(tracked.map((p) =>
+    get(fetch, `https://site.api.espn.com/apis/fantasy/v2/games/fba/news/players?limit=10&playerId=${p.espnId}`)
+      .then((x) => ({ p, feed: JSON.parse(x).feed || [] }))));
+  const ok = results.filter((r) => r.status === "fulfilled").map((r) => r.value);
+  if (!ok.length) throw results[0].reason;
+  return ok.flatMap(({ p, feed }) => feed.filter((a) => !ESPN_SKIP_TYPES.has(a.type)).map((a) => ({
+    id: String(a.id ?? a.headline),
+    source: a.type === "Rotowire" ? "Rotowire (ESPN)" : "ESPN",
+    title: stripHtml(a.headline || ""),
+    body: stripHtml(a.story || (a.description !== a.headline ? a.description : "") || ""),
+    dedupeText: a.headline || "",
+    url: a.links?.web?.href || `https://www.espn.com/nba/player/_/id/${p.espnId}`,
+    published: parseDate(a.published || a.lastModified),
+    names: [p.name],
+    ids: [p.espnId],
+  })));
+}
+
+export function sourceList(env, players = []) {
   const disabled = new Set((env.DISABLE_SOURCES || "").split(",").map((s) => s.trim()).filter(Boolean));
   const all = [
+    ["espn_player", (f) => espnPlayerFeeds(f, players)],
     ["rotowire", (f) => get(f, "https://www.rotowire.com/rss/news.php?sport=NBA").then((x) => parseRss(x, "Rotowire"))],
-    ["espn_fantasy", (f) => get(f, "https://site.api.espn.com/apis/fantasy/v2/games/fba/news/players?limit=100")
-      .then((x) => { const d = JSON.parse(x); return espnItems(d.feed || d.articles, "ESPN Fantasy"); })],
     ["espn_news", (f) => get(f, "https://site.api.espn.com/apis/site/v2/sports/basketball/nba/news?limit=100")
       .then((x) => espnItems(JSON.parse(x).articles, "ESPN"))],
   ];
@@ -141,8 +170,8 @@ export function sourceList(env) {
   return all.filter(([n]) => !disabled.has(n));
 }
 
-async function fetchAll(fetch, env) {
-  const list = sourceList(env);
+async function fetchAll(fetch, env, players) {
+  const list = sourceList(env, players);
   const results = await Promise.allSettled(list.map(([, fn]) => fn(fetch)));
   return list.map(([name], i) => ({ name, ...results[i] }));
 }
@@ -178,6 +207,12 @@ export function formatItem(item, hits) {
   if (item.published) lines.push(`<i>${item.published.toISOString().slice(0, 16).replace("T", " ")} UTC</i>`);
   if (item.url) lines.push(`<a href="${escapeHtml(item.url)}">Open</a>`);
   return lines.join("\n");
+}
+
+// first ~60 normalized chars of the news sentence; identical across Rotowire RSS and ESPN's copy
+export function contentKey(item) {
+  const t = normalize(item.dedupeText || "");
+  return t.length >= 25 ? sha1(t.slice(0, 60)) : null;
 }
 
 function hitsFor(players, item) {
@@ -223,12 +258,15 @@ export async function runPoll({ fetch, store, env, now = Date.now(), siteUrl, lo
   }
 
   const players = await loadPlayers(store, env);
+  await enrichPlayers({ fetch, store, players, now, log });
   const seen = new Set(state.seen);
+  state.sentContent = state.sentContent || [];
+  const sentContent = new Set(state.sentContent);
   const stamp = new Date(now).toISOString().slice(11, 16) + " UTC";
   const outbox = [];
 
   if (players.length) {
-    for (const r of await fetchAll(fetch, env)) {
+    for (const r of await fetchAll(fetch, env, players)) {
       if (r.status === "rejected") {
         state.status[r.name] = `ERROR ${String(r.reason?.message || r.reason).slice(0, 100)} @ ${stamp}`;
         log.warn(r.name, "failed:", r.reason?.message);
@@ -242,7 +280,11 @@ export async function runPoll({ fetch, store, env, now = Date.now(), siteUrl, lo
         if (!state.initialized) continue; // first run: just learn existing news
         if (item.published && now - item.published.getTime() > MAX_AGE_MS) continue;
         const hits = hitsFor(players, item);
-        if (hits.length) outbox.push(formatItem(item, hits));
+        if (!hits.length) continue;
+        const ck = contentKey(item);
+        if (ck && sentContent.has(ck)) continue; // same blurb already sent via another source
+        if (ck) { sentContent.add(ck); state.sentContent.push(ck); }
+        outbox.push(formatItem(item, hits));
       }
     }
     state.initialized = true;
@@ -256,6 +298,7 @@ export async function runPoll({ fetch, store, env, now = Date.now(), siteUrl, lo
     await send(fetch, env, `…and ${outbox.length - MAX_ALERTS_PER_RUN} more updates.`).catch(() => {});
   }
   if (state.seen.length > MAX_SEEN) state.seen = state.seen.slice(-MAX_SEEN);
+  if (state.sentContent.length > 1000) state.sentContent = state.sentContent.slice(-1000);
   state.lastRun = new Date(now).toISOString();
   await store.setJSON("state", state);
   return { sent, players: players.length };
@@ -266,7 +309,7 @@ export async function runTestAlerts({ fetch, store, env, limit = 3 }) {
   const players = await loadPlayers(store, env);
   const lines = [];
   const found = [];
-  for (const r of await fetchAll(fetch, env)) {
+  for (const r of await fetchAll(fetch, env, players)) {
     if (r.status === "rejected") { lines.push(`${r.name}: ERROR ${r.reason?.message}`); continue; }
     const m = r.value.map((i) => [i, hitsFor(players, i)]).filter(([, h]) => h.length);
     lines.push(`${r.name}: ok, ${r.value.length} items, ${m.length} about your players`);
@@ -386,6 +429,22 @@ export async function getRoster({ fetch, store, now = Date.now(), force = false 
   };
   await store.setJSON("roster", roster);
   return roster;
+}
+
+// Give players added by name (Telegram /add, PLAYERS env) their ESPN id + team from the roster.
+export async function enrichPlayers({ fetch, store, players, now = Date.now(), log = console }) {
+  if (!players.some((p) => !p.espnId)) return false;
+  let roster;
+  try { roster = await getRoster({ fetch, store, now }); } catch (e) { log.warn("roster unavailable:", e.message); return false; }
+  const byKey = new Map(roster.players.map((r) => [stripSuffix(r.name), r]));
+  let changed = false;
+  for (const p of players) {
+    if (p.espnId) continue;
+    const r = byKey.get(stripSuffix(p.name)) || roster.players.find((x) => p.aliases.some((a) => stripSuffix(a) === stripSuffix(x.name)));
+    if (r?.id) { p.espnId = r.id; p.team = r.team; changed = true; }
+  }
+  if (changed) await store.setJSON("players", players);
+  return changed;
 }
 
 // validate a player list coming from the web page

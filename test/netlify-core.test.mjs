@@ -23,6 +23,9 @@ function world() {
     if (url.includes("rotowire")) {
       let items = `<item><title>Nikola Jokic: Out Tuesday</title><description><![CDATA[Jokic (ankle) <b>won't</b> play.]]></description><link>https://rw/1</link><guid>rw1</guid><pubDate>${rfc()}</pubDate></item>`;
       if (w.round > 0) items += `<item><title>Nikola Jokić: Upgraded</title><description>Ankle &amp;amp; knee better.</description><link>https://rw/2?a=1&amp;b=2</link><guid>rw2</guid><pubDate>${rfc()}</pubDate></item>`
+        + `<item><title>Shai Gilgeous-Alexander: Questionable vs. LAL</title><description>SGA (hip) is questionable.
+
+        Visit RotoWire.com for more analysis on this update.</description><guid>rw5</guid><pubDate>Wed, 04 Nov 2099 10:00:00 PM PST</pubDate></item>`
         + `<item><title>Some Guy: Starts</title><description>x</description><guid>rw3</guid><pubDate>${rfc()}</pubDate></item>`
         + `<item><title>Jaren Jackson: old</title><description>old</description><guid>rw4</guid><pubDate>Mon, 01 Jan 2024 00:00:00 GMT</pubDate></item>`;
       return ok(`<?xml version="1.0"?><rss><channel>${items}</channel></rss>`);
@@ -59,8 +62,11 @@ test("poll: first run silent, then alerts once, webhook set once, errors recorde
   w.round = 1;
   const r1 = await core.runPoll({ fetch: w.fetch, store, env, siteUrl: "https://x.netlify.app", log: { log() {}, warn() {}, error() {} } });
   assert.equal(r1.sent, 2, w.sent.join("\n---\n"));
-  assert.ok(w.sent[0].includes("<b>Nikola Jokic</b>") && w.sent[0].includes("Ankle &amp; knee") && w.sent[0].includes('href="https://rw/2?a=1&amp;b=2"'));
-  assert.ok(w.sent[1].includes("Shai Gilgeous-Alexander"));
+  const jok = w.sent.find((t) => t.includes("<b>Nikola Jokic</b>"));
+  const sga = w.sent.find((t) => t.includes("<b>Shai Gilgeous-Alexander</b>"));
+  assert.ok(jok.includes("Ankle &amp; knee") && jok.includes('href="https://rw/2?a=1&amp;b=2"'), jok);
+  assert.ok(sga.includes("SGA (hip) is questionable.") && !sga.includes("Visit RotoWire"), sga);
+  assert.ok(sga.includes("2099-11-05 06:00 UTC"), "PM PST parsed: " + sga);
   assert.equal(w.tgCalls.filter((c) => c === "setWebhook").length, 1);
   const st = await store.get("state");
   assert.match(st.status.espn_news, /^ERROR HTTP 503/);
@@ -84,6 +90,30 @@ test("commands: owner only, dedupe retries, add/remove/list/test", async () => {
   await upd(5, "/test");
   assert.ok(w.sent[0].startsWith("🧪 Source check") && w.sent[0].includes("espn_news: ERROR"));
   assert.ok(w.sent.slice(1).every((s) => s.startsWith("🧪 TEST")) && w.sent.length >= 2);
+  assert.ok(!w.sent[0].includes("espn_fantasy"), "espn_fantasy source removed");
+});
+
+test("ESPN videos, recaps and previews are skipped", async () => {
+  const store = memStore(); const sent = [];
+  const arts = (ids) => ids.map(([id, type]) => ({ id, type, headline: "Nikola Jokic " + type, description: "", published: new Date().toISOString() }));
+  let list = arts([[1, "Story"]]);
+  const f = async (url, opts) => {
+    if (url.startsWith("https://api.telegram.org/")) { if (url.endsWith("sendMessage")) sent.push(JSON.parse(opts.body).text); return { ok: true, json: async () => ({ ok: true }) }; }
+    return { ok: true, status: 200, text: async () => JSON.stringify({ articles: list }) };
+  };
+  const e = { ...env, DISABLE_SOURCES: "rotowire" };
+  const quiet = { log() {}, warn() {}, error() {} };
+  await core.runPoll({ fetch: f, store, env: e, log: quiet });
+  list = arts([[2, "Media"], [3, "Recap"], [4, "Preview"], [5, "HeadlineNews"], [6, "Story"]]);
+  await core.runPoll({ fetch: f, store, env: e, log: quiet });
+  assert.deepEqual(sent.map((t) => t.match(/Nikola Jokic (\w+)<\/b>/)[1]).sort(), ["HeadlineNews", "Story"]);
+});
+
+test("User-Agent never contains 'bot' (ESPN returns 403)", async () => {
+  let ua;
+  await core.runPoll({ fetch: async (u, o) => { ua = o.headers["User-Agent"]; return { ok: true, status: 200, text: async () => "<rss></rss>" }; },
+    store: memStore(), env: { ...env, DISABLE_SOURCES: "espn_news" }, log: { log() {}, warn() {}, error() {} } });
+  assert.ok(ua && !/bot/i.test(ua), ua);
 });
 
 test("webhook secret is stable and Telegram-safe", () => {

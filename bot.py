@@ -45,7 +45,8 @@ DATA_DIR = os.environ.get("FNB_DATA", os.path.join(BASE_DIR, "data"))
 STATE_PATH = os.path.join(DATA_DIR, "state.json")
 PLAYERS_PATH = os.path.join(DATA_DIR, "players.json")
 
-USER_AGENT = "Mozilla/5.0 (X11; Linux x86_64) fantasy-news-bot/1.0"
+# ESPN answers 403 to any User-Agent containing "bot".
+USER_AGENT = "Mozilla/5.0 (X11; Linux x86_64) fantasy-news/1.0"
 MAX_SEEN = 5000
 
 log = logging.getLogger("fnb")
@@ -91,6 +92,13 @@ def parse_date(value):
     # type: (Optional[str]) -> Optional[datetime]
     if not value:
         return None
+    # Rotowire uses "Wed, 04 Nov 2026 10:00:00 PM PST": convert to 24h + numeric offset first
+    m = re.match(r"^(.*\d) (\d{1,2}):(\d{2}):(\d{2}) ([AP]M) ([A-Z]{3})$", value.strip())
+    if m:
+        h = int(m.group(2)) % 12 + (12 if m.group(5) == "PM" else 0)
+        offs = {"PST": "-0800", "PDT": "-0700", "MST": "-0700", "MDT": "-0600", "CST": "-0600",
+                "CDT": "-0500", "EST": "-0500", "EDT": "-0400", "GMT": "+0000", "UTC": "+0000"}
+        value = "%s %02d:%s:%s %s" % (m.group(1), h, m.group(3), m.group(4), offs.get(m.group(6), "+0000"))
     try:
         dt = email.utils.parsedate_to_datetime(value)  # RFC 822 (RSS)
     except (TypeError, ValueError, IndexError):
@@ -217,6 +225,7 @@ def parse_rss(raw, source_name):
                 link = el.get("href", "")
         title = strip_html(txt("title"))
         body = strip_html(txt("description") or txt("summary") or txt("content"))
+        body = re.sub(r"\s*Visit RotoWire\.com for more analysis on this update\.?\s*$", "", body, flags=re.I)
         guid = txt("guid") or txt("id") or link or title
         items.append({
             "id": guid,
@@ -236,6 +245,8 @@ def src_espn_news(cfg):
     data = http_get_json(url)
     out = []
     for a in data.get("articles", []):
+        if a.get("type") in ("Media", "Recap", "Preview"):  # videos / game recaps = noise
+            continue
         names = []
         for c in a.get("categories", []):
             if c.get("type") == "athlete":
@@ -434,7 +445,7 @@ class Bot:
         out = []
         if s.get("rotowire", {}).get("enabled", True):
             out.append(("rotowire", lambda c=s.get("rotowire", {}): src_rotowire(c), 0))
-        if s.get("espn_fantasy", {}).get("enabled", True):
+        if s.get("espn_fantasy", {}).get("enabled", False):  # needs playerId now; duplicates Rotowire
             out.append(("espn_fantasy", lambda c=s.get("espn_fantasy", {}): src_espn_fantasy(c), 0))
         if s.get("espn_news", {}).get("enabled", True):
             out.append(("espn_news", lambda c=s.get("espn_news", {}): src_espn_news(c), 0))

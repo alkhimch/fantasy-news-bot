@@ -83,7 +83,7 @@ Remind me:
 |---|---|
 | The deploy fails with "secrets scanning" | Add an environment variable `SECRETS_SCAN_OMIT_KEYS` = `PLAYERS,TELEGRAM_CHAT_ID`, then redeploy |
 | `/status` gets no reply | Wait 2–4 minutes after the first deploy, because the first `poll` run sets up the webhook. Check the poll logs for `setWebhook failed`. A `401` there means the token is wrong. |
-| `/status` reply says a source has an `ERROR` | The other sources still work. To turn that one off, add the variable `DISABLE_SOURCES` = `espn_fantasy` (comma separated for more than one), then redeploy |
+| `/status` reply says a source has an `ERROR` | The other sources still work. To turn that one off, add the variable `DISABLE_SOURCES` = `espn_news` (comma separated for more than one), then redeploy |
 | Alerts arrive but `/add` gets no reply | Check that `TELEGRAM_CHAT_ID` is exactly your number from @userinfobot |
 | The usage page shows you're close to the free limit | In `netlify/functions/poll.mjs`, change `*/2` to `*/5` and push |
 | You want tweets | Make an RSS feed of the reporter's X account (for example with rss.app), then add the variable `EXTRA_RSS` = `X Shams\|https://rss.app/feeds/XXXX.xml` |

@@ -16,7 +16,7 @@
 
   "sources": {
     "rotowire":     {"enabled": true},
-    "espn_fantasy": {"enabled": true},
+    "espn_fantasy": {"enabled": false},
     "espn_news":    {"enabled": true},
 
     "twitter": {

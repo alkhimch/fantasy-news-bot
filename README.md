@@ -7,8 +7,8 @@ It uses only the Python standard library (3.8+), so there is nothing to install.
 | Source | Default | Notes |
 |---|---|---|
 | Rotowire NBA RSS | on | Classic fantasy blurbs. Many of them are written from beat-reporter tweets. |
-| ESPN Fantasy player news | on | Injury and role updates (unofficial endpoint). |
-| ESPN NBA news | on | Articles tagged with athletes. |
+| ESPN Fantasy player news | off | Now only works per player, and repeats Rotowire's news. The Netlify version uses it per player instead. |
+| ESPN NBA news | on | Articles tagged with athletes. Videos, game recaps and previews are skipped. |
 | X / Twitter API | off | Needs a **paid** X API plan, because search is not on the free tier. Searches tweets from reporters you choose that mention your players. |
 | Extra RSS feeds | empty | Any RSS/Atom URL, such as an RSSHub or rss.app feed of an X account. This is a free way to get tweets. |
 
@@ -37,6 +37,8 @@ After the bot is running, send `/status` in Telegram to see whether each source 
   - a Telegram webhook answers `/add`, `/remove`, `/list`, `/status` and `/test` instantly
   - a web page lets you pick players from every current NBA roster (loaded from ESPN, refreshed every 12 hours). Send `/web` to the bot to get its private link. The bot also sends the link once, the first time it runs.
   - Netlify Blobs stores the player list and which news was already sent
+  - sources: ESPN's feed for each tracked player (about 10 latest Rotowire blurbs per player; reliable), Rotowire RSS (only the newest 5 items league-wide), and ESPN NBA headlines. When the same blurb arrives from two sources, it's sent once.
+  - ESPN returns 403 to any User-Agent that contains "bot", so don't add it.
 
   Set the environment variables `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID` and `PLAYERS` in Netlify. For step-by-step setup, see [deploy/claude-in-chrome-prompt.md](deploy/claude-in-chrome-prompt.md). Run the tests with `npm test`.
 - **Manual fallback: GitHub Actions.** `.github/workflows/news.yml` runs `bot.py --once` every 5 minutes. GitHub often starts these runs late, so alerts arrive 5–15 minutes after the news. Settings come from GitHub Secrets `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID`, and the variable `PLAYERS`. The bot's memory of sent news is saved on the `state` branch. A public repo gets unlimited free minutes. A private repo should use `*/30` to stay within 2,000 minutes per month.

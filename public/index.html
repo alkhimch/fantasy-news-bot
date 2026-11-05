@@ -105,7 +105,7 @@
   } catch (e) { /* storage blocked: key only lives in the URL */ }
   if (new URLSearchParams(location.search).has("key")) history.replaceState(null, "", location.pathname);
 
-  let roster = [], mine = [], saveTimer = null;
+  let roster = [], mine = [], saveTimer = null, rosterError = "";
 
   const api = async (path, opts = {}) => {
     const res = await fetch(path, { ...opts, headers: { "x-key": k || "", "Content-Type": "application/json", ...(opts.headers || {}) } });
@@ -173,7 +173,13 @@
   function renderResults() {
     const box = $("results"); box.replaceChildren();
     const q = norm($("q").value), team = $("team").value;
-    if (!roster.length) { box.append(el("div", { class: "hint" }, "Тоглогчдын жагсаалт ачаалж байна…")); return; }
+    if (!roster.length) {
+      if (rosterError) {
+        box.append(el("div", { class: "hint" }, "Жагсаалт ачаалагдсангүй (" + rosterError + "). Доороос гараар нэмж болно. ",
+          el("button", { onclick: loadRoster }, "Дахин оролдох")));
+      } else box.append(el("div", { class: "hint" }, "Тоглогчдын жагсаалт ачаалж байна…"));
+      return;
+    }
     if (q.length < 2 && !team) { box.append(el("div", { class: "hint" }, "Нэрээр хайх эсвэл баг сонгоно уу.")); return; }
     const words = q.split(" ").filter(Boolean);
     const hits = roster.filter((p) => (!team || p.team === team) && words.every((w) => norm(p.name).includes(w))).slice(0, 60);
@@ -215,13 +221,20 @@
       mine = await api("/api/players");
       renderMine();
     } catch (e) { if (e.message !== "unauthorized") flash("Ачаалж чадсангүй: " + e.message, true); return; }
+    await loadRoster();
+  }
+
+  async function loadRoster() {
+    rosterError = ""; renderResults();
     try {
       const r = await api("/api/roster");
       roster = r.players || [];
+      $("team").replaceChildren(el("option", { value: "" }, "Бүх баг"));
       for (const t of r.teams || []) $("team").append(el("option", { value: t.abbr }, t.abbr + (t.name ? " — " + t.name : "")));
       $("rosterInfo").textContent = `NBA-ийн ${roster.length} тоглогч · шинэчилсэн: ${new Date(r.updatedAt).toLocaleString()}`;
     } catch (e) {
-      $("rosterInfo").textContent = "Тоглогчдын жагсаалт ачаалагдсангүй (" + e.message + "). Гараар нэмж болно.";
+      rosterError = e.message;
+      $("rosterInfo").textContent = "";
     }
     renderResults();
   }
