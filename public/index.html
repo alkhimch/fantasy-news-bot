@@ -48,6 +48,11 @@
             border-radius: 999px; padding: 6px 14px; font-size: 13px; box-shadow: 0 4px 16px rgba(0,0,0,.12); display: none; }
   .status.show { display: block; }
   .status.err { color: var(--bad); }
+  .fl { display: flex; align-items: center; gap: 8px; padding: 8px 2px; border-top: 1px solid var(--line); }
+  .fl:first-child { border-top: 0; }
+  .fl .info { flex: 1; min-width: 0; }
+  .fl select { min-width: 0; width: auto; padding: 6px 8px; }
+  .chip.add { cursor: pointer; padding: 4px 10px; border: 1px dashed var(--line); background: transparent; }
   .hint { color: var(--muted); font-size: 14px; padding: 8px 2px; }
   .lock { text-align: center; padding: 40px 10px; }
   .lock code { background: var(--chip); padding: 2px 6px; border-radius: 6px; }
@@ -87,6 +92,17 @@
       </div>
       <div class="sub" id="rosterInfo" style="margin-top:8px"></div>
     </section>
+
+    <section class="card">
+      <h2 id="followTitle">Bluesky хаягууд</h2>
+      <div class="sub">Таны тоглогчдыг дурдсан пост гарвал мэдэгдэнэ. “Бүх пост” сонговол бүх постыг илгээнэ.</div>
+      <div class="list" id="follows"></div>
+      <div class="row" style="margin-top:10px">
+        <input id="followInput" placeholder="@handle эсвэл bsky.app линк" autocomplete="off">
+        <button class="primary" id="followAdd">Дагах</button>
+      </div>
+      <div class="chips" id="suggest" style="margin-top:10px"></div>
+    </section>
   </div>
 </main>
 <div class="status" id="status"></div>
@@ -105,7 +121,11 @@
   } catch (e) { /* storage blocked: key only lives in the URL */ }
   if (new URLSearchParams(location.search).has("key")) history.replaceState(null, "", location.pathname);
 
-  let roster = [], mine = [], saveTimer = null, rosterError = "";
+  let roster = [], mine = [], saveTimer = null, rosterError = "", follows = [];
+  const SUGGEST = [
+    { h: "shamsbot.bsky.social", d: "Shams Charania-ийн жиргээ (албан бус хуулбар)" },
+    { h: "thesteinline.bsky.social", d: "Marc Stein" },
+  ];
 
   const api = async (path, opts = {}) => {
     const res = await fetch(path, { ...opts, headers: { "x-key": k || "", "Content-Type": "application/json", ...(opts.headers || {}) } });
@@ -213,6 +233,51 @@
   $("addCustom").addEventListener("click", addCustom);
   $("custom").addEventListener("keydown", (e) => { if (e.key === "Enter") addCustom(); });
 
+  // ---- Bluesky follows
+  function renderFollows() {
+    const box = $("follows"); box.replaceChildren();
+    $("followTitle").textContent = `Bluesky хаягууд (${follows.length})`;
+    if (!follows.length) box.append(el("div", { class: "hint" }, "Одоогоор хэнийг ч дагаагүй."));
+    for (const f of follows) {
+      const sel = el("select", { "aria-label": "Мэдэгдэл", onchange: (e) => {
+        saveFollows(follows.map((x) => (x === f ? { ...x, mode: e.target.value } : x)));
+      } }, el("option", { value: "players" }, "Миний тоглогчид"), el("option", { value: "all" }, "Бүх пост"));
+      sel.value = f.mode === "all" ? "all" : "players";
+      const old = f.lastPostAt && Date.now() - Date.parse(f.lastPostAt) > 30 * 864e5;
+      box.append(el("div", { class: "fl" },
+        el("div", { class: "info" },
+          el("div", { class: "name" }, f.name || f.handle),
+          el("div", { class: "meta" }, "@" + f.handle, old ? el("span", { class: "inj" }, " · ⚠️ идэвхгүй (" + f.lastPostAt.slice(0, 10) + ")") : null)),
+        sel,
+        el("button", { title: "Болих", "aria-label": "Дагахаа болих " + f.handle, onclick: () => saveFollows(follows.filter((x) => x !== f)) }, "×")));
+    }
+    const sug = $("suggest"); sug.replaceChildren();
+    for (const s of SUGGEST) {
+      if (follows.some((f) => f.handle === s.h)) continue;
+      sug.append(el("button", { class: "chip add", title: s.d, onclick: () => saveFollows([...follows, { handle: s.h, mode: "players" }]) }, "+ " + s.d));
+    }
+  }
+
+  async function saveFollows(list) {
+    flash("Хадгалж байна…");
+    try {
+      follows = await api("/api/follows", { method: "PUT", body: JSON.stringify({ follows: list }) });
+      flash("Хадгалсан ✓");
+    } catch (e) {
+      if (e.message !== "unauthorized") flash(e.message, true);
+    }
+    renderFollows();
+  }
+
+  const addFollow = () => {
+    const h = $("followInput").value.trim();
+    if (!h) return;
+    $("followInput").value = "";
+    saveFollows([...follows, { handle: h, mode: "players" }]);
+  };
+  $("followAdd").addEventListener("click", addFollow);
+  $("followInput").addEventListener("keydown", (e) => { if (e.key === "Enter") addFollow(); });
+
   async function start() {
     if (!k) { lock(); return; }
     $("app").hidden = false;
@@ -221,6 +286,8 @@
       mine = await api("/api/players");
       renderMine();
     } catch (e) { if (e.message !== "unauthorized") flash("Ачаалж чадсангүй: " + e.message, true); return; }
+    api("/api/follows").then((f) => { follows = f; renderFollows(); })
+      .catch((e) => { if (e.message !== "unauthorized") $("follows").textContent = "Ачаалж чадсангүй: " + e.message; });
     await loadRoster();
   }
 

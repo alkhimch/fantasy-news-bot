@@ -89,7 +89,7 @@ export function parseRss(xml, source) {
       source,
       title,
       body: strip(tag(b, "description") || tag(b, "summary") || tag(b, "content")),
-      get dedupeText() { return this.body; },
+      get dedupeTexts() { return [this.title, this.body]; },
       url: link,
       published: parseDate(tag(b, "pubDate") || tag(b, "published") || tag(b, "updated")),
       names: [],
@@ -146,7 +146,7 @@ async function espnPlayerFeeds(fetch, players) {
     source: a.type === "Rotowire" ? "Rotowire (ESPN)" : "ESPN",
     title: stripHtml(a.headline || ""),
     body: stripHtml(a.story || (a.description !== a.headline ? a.description : "") || ""),
-    dedupeText: a.headline || "",
+    dedupeTexts: [a.headline || ""],
     url: a.links?.web?.href || `https://www.espn.com/nba/player/_/id/${p.espnId}`,
     published: parseDate(a.published || a.lastModified),
     names: [p.name],
@@ -154,11 +154,83 @@ async function espnPlayerFeeds(fetch, players) {
   })));
 }
 
-export function sourceList(env, players = []) {
+// ------------------------------------------------------------------ bluesky
+const BSKY = "https://public.api.bsky.app/xrpc";
+export const DEFAULT_FOLLOWS = ["shamsbot.bsky.social", "thesteinline.bsky.social"];
+export const MAX_FOLLOWS = 20;
+
+// "@shamsbot", "shamsbot.bsky.social", "https://bsky.app/profile/x.bsky.social" -> "x.bsky.social"
+export function normalizeHandle(input) {
+  let h = String(input || "").trim().toLowerCase()
+    .replace(/^https?:\/\/(www\.)?bsky\.app\/profile\//, "").replace(/[/?#].*$/, "").replace(/^@/, "");
+  if (!h) return "";
+  if (!h.startsWith("did:") && !h.includes(".")) h += ".bsky.social";
+  return /^(did:[a-z0-9:._-]+|[a-z0-9-]+(\.[a-z0-9-]+)*\.[a-z]{2,})$/.test(h) ? h : "";
+}
+
+const bskyFeedUrl = (actor, limit) =>
+  `${BSKY}/app.bsky.feed.getAuthorFeed?actor=${encodeURIComponent(actor)}&limit=${limit}&filter=posts_no_replies`;
+
+export async function resolveBsky(fetch, input) {
+  const h = normalizeHandle(input);
+  if (!h) throw new Error(`"${input}" is not a Bluesky handle`);
+  let p;
+  try { p = JSON.parse(await get(fetch, `${BSKY}/app.bsky.actor.getProfile?actor=${encodeURIComponent(h)}`)); }
+  catch { throw new Error(`Bluesky account not found: ${h}`); }
+  if (!p?.did) throw new Error(`Bluesky account not found: ${h}`);
+  let lastPostAt = null;
+  try {
+    const f = JSON.parse(await get(fetch, bskyFeedUrl(p.did, 5)));
+    lastPostAt = (f.feed || []).filter((x) => !x.reason).map((x) => x.post?.record?.createdAt).filter(Boolean).sort().pop() || null;
+  } catch { /* profile exists; activity unknown */ }
+  return { handle: p.handle, did: p.did, name: p.displayName || "", lastPostAt };
+}
+
+export async function loadFollows(store, env) {
+  let follows = await store.get("follows", { type: "json" });
+  if (!follows) {
+    const seed = env.FOLLOWS != null ? env.FOLLOWS.split(",") : DEFAULT_FOLLOWS;
+    follows = seed.map(normalizeHandle).filter(Boolean).map((handle) => ({ handle, mode: "players" }));
+    await store.setJSON("follows", follows);
+  }
+  return follows;
+}
+
+async function blueskyFeeds(fetch, follows) {
+  if (!follows.length) return Object.assign([], { seedKeys: [] });
+  const results = await Promise.allSettled(follows.map((fo) =>
+    get(fetch, bskyFeedUrl(fo.did || fo.handle, 30)).then((x) => ({ fo, feed: JSON.parse(x).feed || [] }))));
+  const ok = results.filter((r) => r.status === "fulfilled").map((r) => r.value);
+  if (!ok.length) throw results[0].reason;
+  const items = ok.flatMap(({ fo, feed }) => feed.filter((x) => !x.reason && x.post).map(({ post }) => {
+    const text = post.record?.text || "";
+    const ext = post.embed?.external || post.embed?.media?.external;
+    const handle = post.author?.handle || fo.handle;
+    return {
+      id: post.uri,
+      source: `Bluesky @${handle.replace(/\.bsky\.social$/, "")}`,
+      title: "",
+      body: [text, ext?.title].filter(Boolean).join("\n"),
+      dedupeTexts: [text.split("\n")[0]],
+      url: `https://bsky.app/profile/${handle}/post/${post.uri.split("/").pop()}`,
+      published: parseDate(post.record?.createdAt || post.indexedAt),
+      names: [], ids: [],
+      seedKey: "bsky:" + fo.handle,
+      followAll: fo.mode === "all",
+    };
+  }));
+  items.seedKeys = ok.map(({ fo }) => "bsky:" + fo.handle);
+  return items;
+}
+
+export function sourceList(env, players = [], follows = []) {
   const disabled = new Set((env.DISABLE_SOURCES || "").split(",").map((s) => s.trim()).filter(Boolean));
   const all = [
-    ["espn_player", (f) => espnPlayerFeeds(f, players)],
+    // Rotowire RSS first: its items carry both wordings of a blurb (title line + news sentence),
+    // so the ESPN copy (sentence) and the RotoWire Bluesky post (title line) dedupe against it.
     ["rotowire", (f) => get(f, "https://www.rotowire.com/rss/news.php?sport=NBA").then((x) => parseRss(x, "Rotowire"))],
+    ["espn_player", (f) => espnPlayerFeeds(f, players)],
+    ["bluesky", (f) => blueskyFeeds(f, follows)],
     ["espn_news", (f) => get(f, "https://site.api.espn.com/apis/site/v2/sports/basketball/nba/news?limit=100")
       .then((x) => espnItems(JSON.parse(x).articles, "ESPN"))],
   ];
@@ -170,8 +242,8 @@ export function sourceList(env, players = []) {
   return all.filter(([n]) => !disabled.has(n));
 }
 
-async function fetchAll(fetch, env, players) {
-  const list = sourceList(env, players);
+async function fetchAll(fetch, env, players, follows = []) {
+  const list = sourceList(env, players, follows);
   const results = await Promise.allSettled(list.map(([, fn]) => fn(fetch)));
   return list.map(([name], i) => ({ name, ...results[i] }));
 }
@@ -199,7 +271,9 @@ export const webLink = (siteUrl, env) => `${siteUrl}/?key=${webKey(env)}`;
 export const webhookSecret = (env) => sha1("fnb-webhook:" + env.TELEGRAM_BOT_TOKEN).slice(0, 32);
 
 export function formatItem(item, hits) {
-  const lines = [`🏀 <b>${escapeHtml(hits.join(", "))}</b>  ·  <i>${escapeHtml(item.source)}</i>`];
+  const lines = [hits.length
+    ? `🏀 <b>${escapeHtml(hits.join(", "))}</b>  ·  <i>${escapeHtml(item.source)}</i>`
+    : `📣 <i>${escapeHtml(item.source)}</i>`];
   if (item.title) lines.push(`<b>${escapeHtml(item.title)}</b>`);
   let body = item.body || "";
   if (body.length > 900) body = body.slice(0, 900).replace(/\s+\S*$/, "") + "…";
@@ -210,10 +284,11 @@ export function formatItem(item, hits) {
 }
 
 // first ~60 normalized chars of the news sentence; identical across Rotowire RSS and ESPN's copy
-export function contentKey(item) {
-  const t = normalize(item.dedupeText || "");
-  return t.length >= 25 ? sha1(t.slice(0, 60)) : null;
+export function contentKeys(item) {
+  return (item.dedupeTexts || [item.dedupeText]).map((x) => normalize(x || ""))
+    .filter((t) => t.length >= 25).map((t) => sha1(t.slice(0, 60)));
 }
+export const contentKey = (item) => contentKeys(item)[0] || null;
 
 function hitsFor(players, item) {
   const ids = new Set(item.ids || []);
@@ -258,15 +333,18 @@ export async function runPoll({ fetch, store, env, now = Date.now(), siteUrl, lo
   }
 
   const players = await loadPlayers(store, env);
+  const follows = await loadFollows(store, env);
   await enrichPlayers({ fetch, store, players, now, log });
+  state.seeded = state.seeded || [];
+  const seededAtStart = new Set(state.seeded);
   const seen = new Set(state.seen);
   state.sentContent = state.sentContent || [];
   const sentContent = new Set(state.sentContent);
   const stamp = new Date(now).toISOString().slice(11, 16) + " UTC";
   const outbox = [];
 
-  if (players.length) {
-    for (const r of await fetchAll(fetch, env, players)) {
+  if (players.length || follows.some((f) => f.mode === "all")) {
+    for (const r of await fetchAll(fetch, env, players, follows)) {
       if (r.status === "rejected") {
         state.status[r.name] = `ERROR ${String(r.reason?.message || r.reason).slice(0, 100)} @ ${stamp}`;
         log.warn(r.name, "failed:", r.reason?.message);
@@ -278,14 +356,16 @@ export async function runPoll({ fetch, store, env, now = Date.now(), siteUrl, lo
         if (seen.has(key)) continue;
         seen.add(key); state.seen.push(key);
         if (!state.initialized) continue; // first run: just learn existing news
+        if (item.seedKey && !seededAtStart.has(item.seedKey)) continue; // newly followed account: skip its old posts
         if (item.published && now - item.published.getTime() > MAX_AGE_MS) continue;
         const hits = hitsFor(players, item);
-        if (!hits.length) continue;
-        const ck = contentKey(item);
-        if (ck && sentContent.has(ck)) continue; // same blurb already sent via another source
-        if (ck) { sentContent.add(ck); state.sentContent.push(ck); }
-        outbox.push(formatItem(item, hits));
+        if (!hits.length && !item.followAll) continue;
+        const keys = contentKeys(item);
+        const dup = keys.some((k) => sentContent.has(k)); // same blurb already sent via another source
+        for (const k of keys) if (!sentContent.has(k)) { sentContent.add(k); state.sentContent.push(k); }
+        if (!dup) outbox.push(formatItem(item, hits));
       }
+      for (const k of r.value.seedKeys || []) if (!state.seeded.includes(k)) state.seeded.push(k);
     }
     state.initialized = true;
   }
@@ -307,15 +387,24 @@ export async function runPoll({ fetch, store, env, now = Date.now(), siteUrl, lo
 // ------------------------------------------------------------- test (/test)
 export async function runTestAlerts({ fetch, store, env, limit = 3 }) {
   const players = await loadPlayers(store, env);
+  const follows = await loadFollows(store, env);
   const lines = [];
   const found = [];
-  for (const r of await fetchAll(fetch, env, players)) {
+  for (const r of await fetchAll(fetch, env, players, follows)) {
     if (r.status === "rejected") { lines.push(`${r.name}: ERROR ${r.reason?.message}`); continue; }
     const m = r.value.map((i) => [i, hitsFor(players, i)]).filter(([, h]) => h.length);
     lines.push(`${r.name}: ok, ${r.value.length} items, ${m.length} about your players`);
     found.push(...m);
   }
   await send(fetch, env, "🧪 Source check\n" + escapeHtml(lines.join("\n")));
+  const keysSeen = new Set();
+  const unique = found.filter(([item]) => {
+    const keys = contentKeys(item);
+    const dup = keys.some((k) => keysSeen.has(k));
+    keys.forEach((k) => keysSeen.add(k));
+    return !dup;
+  });
+  found.length = 0; found.push(...unique);
   found.sort((a, b) => (b[0].published?.getTime() || 0) - (a[0].published?.getTime() || 0));
   if (!found.length) {
     await send(fetch, env, "No current news mentions your players. Try /add a player who is in today's news.");
@@ -327,7 +416,10 @@ export async function runTestAlerts({ fetch, store, env, limit = 3 }) {
 // -------------------------------------------------------------- commands
 const HELP =
   "/list – tracked players\n/add Name[, Name2] – track (aliases: Name (Nick))\n" +
-  "/remove Name – untrack\n/web – link to pick players on the website\n/status – source health\n/test – check sources + send sample alerts";
+  "/remove Name – untrack\n/web – link to pick players on the website\n" +
+  "/follow handle [all] – follow a Bluesky account (posts about your players; 'all' = every post)\n" +
+  "/unfollow handle – stop following\n/following – followed accounts\n" +
+  "/status – source health\n/test – check sources + send sample alerts";
 
 export async function handleUpdate({ update, fetch, store, env }) {
   // Telegram retries if we're slow; process each update_id only once.
@@ -361,6 +453,20 @@ export async function handleUpdate({ update, fetch, store, env }) {
     const st = await loadState(store);
     reply = Object.entries(st.status).map(([k, v]) => `${k}: ${v}`).join("\n") || "No polls yet.";
     reply += `\nLast run: ${st.lastRun || "never"}`;
+  } else if (cmd === "/follow" && arg) {
+    reply = await followCommand({ fetch, store, env, arg });
+  } else if (cmd === "/unfollow" && arg) {
+    const follows = await loadFollows(store, env);
+    const h = normalizeHandle(arg);
+    const f = follows.find((x) => x.handle === h || x.did === h);
+    if (f) await store.setJSON("follows", follows.filter((x) => x !== f));
+    reply = f ? `Unfollowed @${f.handle}.` : `Not following: ${arg}`;
+  } else if (cmd === "/following" || cmd === "/follow") {
+    const follows = await loadFollows(store, env);
+    reply = follows.length
+      ? "Following on Bluesky:\n" + follows.map((f) => `• @${f.handle}${f.name ? ` (${f.name})` : ""} – ${f.mode === "all" ? "every post" : "your players only"}`).join("\n")
+      : "Not following anyone.";
+    reply += "\n\nAdd: /follow shamsbot.bsky.social  (add 'all' for every post)";
   } else if (cmd === "/web") {
     const st = await loadState(store);
     const site = (st.webhookUrl || "").replace(/\/telegram$/, "");
@@ -462,5 +568,48 @@ export function sanitizePlayers(list) {
     if (p.team) entry.team = String(p.team).replace(/[^A-Za-z]/g, "").slice(0, 4);
     out.push(entry);
   }
+  return out;
+}
+
+// /follow <handle> [all]
+export async function followCommand({ fetch, store, env, arg, now = Date.now() }) {
+  if (/(^|\/\/|\.)(x|twitter)\.com\b/i.test(arg)) {
+    return "X/Twitter accounts can't be read for free – only Bluesky accounts work.\nExample: /follow shamsbot.bsky.social";
+  }
+  const parts = arg.split(/\s+/).filter(Boolean);
+  const mode = parts.slice(1).some((p) => p.toLowerCase() === "all") ? "all" : "players";
+  const follows = await loadFollows(store, env);
+  let info;
+  try { info = await resolveBsky(fetch, parts[0]); } catch (e) { return e.message + "\nExample: /follow shamsbot.bsky.social"; }
+  const existing = follows.find((f) => f.did === info.did || f.handle === info.handle);
+  if (!existing && follows.length >= MAX_FOLLOWS) return `You can follow up to ${MAX_FOLLOWS} accounts. /unfollow one first.`;
+  const entry = { handle: info.handle, did: info.did, name: info.name, lastPostAt: info.lastPostAt, mode };
+  await store.setJSON("follows", existing ? follows.map((f) => (f === existing ? entry : f)) : [...follows, entry]);
+  let msg = `${existing ? "Updated" : "Following"} @${info.handle}${info.name ? ` (${info.name})` : ""} – ` +
+    (mode === "all" ? "you'll get every post." : "you'll get posts that mention your players.");
+  const ageDays = info.lastPostAt ? (now - Date.parse(info.lastPostAt)) / 864e5 : Infinity;
+  if (ageDays > 30) {
+    msg += `\n⚠️ Last post: ${info.lastPostAt ? info.lastPostAt.slice(0, 10) : "none"} – this account looks inactive.`;
+  }
+  return msg;
+}
+
+// validate a follow list coming from the web page; resolves new handles via Bluesky
+export async function saveFollowsFromWeb({ fetch, store, env, list }) {
+  if (!Array.isArray(list)) throw new Error("follows must be an array");
+  const current = await loadFollows(store, env);
+  const out = [];
+  for (const raw of list.slice(0, MAX_FOLLOWS)) {
+    const h = normalizeHandle(raw?.handle);
+    if (!h) throw new Error(`"${raw?.handle}" is not a Bluesky handle`);
+    const mode = raw?.mode === "all" ? "all" : "players";
+    let entry = current.find((f) => f.handle === h || f.did === h);
+    if (!entry || !entry.did) {
+      const info = await resolveBsky(fetch, h);
+      entry = { handle: info.handle, did: info.did, name: info.name, lastPostAt: info.lastPostAt };
+    }
+    if (!out.some((f) => f.did === entry.did)) out.push({ ...entry, mode });
+  }
+  await store.setJSON("follows", out);
   return out;
 }
