@@ -1,0 +1,20 @@
+{
+  "seen": [
+    "b1dd0227f9556644c467e60612b5cff2d92df494",
+    "af18f3c7846f6e9617afc7645c73d630dca7a8c2",
+    "b9d256318b866bc047d685d29699e61482fa65a5",
+    "742f39b9d7b7d69c2ae2997e440d4a16cf1591bd",
+    "7b94982a7d40b419eeb5a3b066a30ce012746c69"
+  ],
+  "update_offset": 523255747,
+  "status": {
+    "rotowire": "ok 5 items @ 12:11 UTC",
+    "espn_fantasy": "ERROR HTTP Error 403: Forbidden @ 12:11 UTC",
+    "espn_news": "ERROR HTTP Error 403: Forbidden @ 12:11 UTC"
+  },
+  "last_poll": {
+    "rotowire": 1793880703.319707,
+    "espn_fantasy": 1793880703.420243,
+    "espn_news": 1793880703.6175663
+  }
+}
