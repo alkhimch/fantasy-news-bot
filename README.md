@@ -21,6 +21,24 @@ It uses only the Python standard library (3.8+), so there is nothing to install.
 5. Run `python3 bot.py --test-message`. You should get "✅ connected".
 6. Run `python3 bot.py`. The first poll only indexes news that is already out, so you don't get a flood of old items. After that, you get alerts for new items only.
 
+## Test it
+
+```bash
+python3 bot.py --test-message   # Telegram works?
+python3 bot.py --test-alerts    # every source reachable? sends the newest 3 matches now, marked 🧪
+```
+`--test-alerts` doesn't change saved state, so you can run it as often as you like. If it says no current news matches your players, `/add` a player who is in today's news.
+After the bot is running, send `/status` in Telegram to see whether each source is working.
+
+## Where to run it
+
+It needs to be always on, use little memory (about 20 MB) and have Python 3.8+. Any of these work:
+- **A cheap Linux VPS** (Hetzner, DigitalOcean, Vultr; about $4–5/mo), or **Oracle Cloud Always Free**:
+  `git clone`, create `config.json`, then set up the systemd service below.
+- **A home PC or Raspberry Pi** that stays on: same steps.
+
+GitHub Actions cron is not a good fit. It runs every 5 minutes at best, scheduled runs often start late, and it would need extra work to save the list of already-sent news between runs.
+
 ## Keep it running
 
 Use a systemd user service:

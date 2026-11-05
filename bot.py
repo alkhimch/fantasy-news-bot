@@ -12,6 +12,7 @@ Usage:
   python3 bot.py --once            # one poll cycle, then exit (good for cron)
   python3 bot.py                   # run forever
   python3 bot.py --test-message    # send a test message to Telegram
+  python3 bot.py --test-alerts     # check live sources + send newest 3 matching items now
 
 Telegram commands (send to your bot):
   /list               show tracked players
@@ -446,6 +447,36 @@ class Bot:
             out.append(("extra_rss", lambda c=ex: src_extra_rss(c), 0))
         return out
 
+    def match_item(self, item):
+        hits = []
+        for n in item["names"]:
+            hits.extend(self.players.match(n))
+        hits.extend(self.players.match(item["title"] + " " + item["body"]))
+        return list(dict.fromkeys(hits))
+
+    def test_alerts(self, limit=3):
+        """Fetch every source, report health, send the newest matches. Does not touch state."""
+        found = []
+        for name, fetch, _ in self.sources():
+            try:
+                items = fetch()
+            except Exception as e:
+                print("%-13s ERROR %s" % (name, e))
+                continue
+            matched = [(i, self.match_item(i)) for i in items]
+            matched = [(i, h) for i, h in matched if h]
+            print("%-13s ok  %3d items, %d about your players" % (name, len(items), len(matched)))
+            found.extend(matched)
+        epoch = datetime.min.replace(tzinfo=timezone.utc)
+        found.sort(key=lambda x: x[0]["published"] or epoch, reverse=True)
+        if not found:
+            print("\nNo current news mentions your players. Try /add a player who is in today's news.")
+            return
+        for item, hits in found[:limit]:
+            print("-> sending: %s | %s" % (", ".join(hits), item["title"] or item["body"][:60]))
+            self.tg.send("🧪 TEST\n" + format_item(item, hits))
+            time.sleep(0.5)
+
     def poll(self):
         if not self.players.items:
             log.info("no players tracked; skipping poll")
@@ -474,11 +505,7 @@ class Bot:
                     continue  # first run: just learn what's already out there
                 if item["published"] and now - item["published"] > self.max_age:
                     continue
-                hits = []
-                for n in item["names"]:
-                    hits.extend(self.players.match(n))
-                hits.extend(self.players.match(item["title"] + " " + item["body"]))
-                hits = list(dict.fromkeys(hits))
+                hits = self.match_item(item)
                 if not hits:
                     continue
                 try:
@@ -552,6 +579,8 @@ def main():
     ap.add_argument("--once", action="store_true", help="poll once and exit")
     ap.add_argument("--get-chat-id", action="store_true", help="print chat ids that messaged the bot")
     ap.add_argument("--test-message", action="store_true", help="send a test message")
+    ap.add_argument("--test-alerts", action="store_true",
+                    help="fetch live feeds, show source health, send newest 3 matches (state untouched)")
     ap.add_argument("-v", "--verbose", action="store_true")
     args = ap.parse_args()
 
@@ -579,6 +608,9 @@ def main():
         return
 
     bot = Bot(cfg)
+    if args.test_alerts:
+        bot.test_alerts()
+        return
     if args.once:
         bot.handle_commands()
         bot.poll()
