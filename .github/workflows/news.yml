@@ -1,0 +1,58 @@
+name: fantasy-news
+
+on:
+  schedule:
+    - cron: "*/5 * * * *"   # GitHub's minimum; real runs are often 5-15 min apart
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "once = normal poll, test-alerts = send newest 3 matches, test-message = ping"
+        default: once
+        type: choice
+        options: [once, test-alerts, test-message]
+
+permissions:
+  contents: write            # to save bot memory on the 'state' branch
+
+concurrency:
+  group: fantasy-news
+  cancel-in-progress: false
+
+jobs:
+  poll:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Load state branch into data/
+        run: |
+          if git fetch --depth=1 origin state:state 2>/dev/null; then
+            git worktree add data state
+          else
+            git worktree add --detach data
+            cd data && git checkout --orphan state && git rm -rfq . && cd ..
+          fi
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Run bot
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          PLAYERS: ${{ vars.PLAYERS }}          # seeds the list on first run; later use /add /remove
+          X_BEARER_TOKEN: ${{ secrets.X_BEARER_TOKEN }}
+        run: python bot.py --${{ github.event.inputs.mode || 'once' }}
+
+      - name: Save state
+        if: always()
+        run: |
+          cd data
+          git add -A
+          git -c user.name=fantasy-news-bot -c user.email=actions@users.noreply.github.com \
+            commit -q --amend -m "bot state" 2>/dev/null \
+          || git -c user.name=fantasy-news-bot -c user.email=actions@users.noreply.github.com \
+            commit -q -m "bot state" || true
+          if git rev-parse -q --verify HEAD >/dev/null; then git push -q -f origin HEAD:state; fi

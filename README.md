@@ -32,12 +32,9 @@ After the bot is running, send `/status` in Telegram to see whether each source 
 
 ## Where to run it
 
-It needs to be always on, use little memory (about 20 MB) and have Python 3.8+. Any of these work:
-- **A cheap Linux VPS** (Hetzner, DigitalOcean, Vultr; about $4–5/mo), or **Oracle Cloud Always Free**:
-  `git clone`, create `config.json`, then set up the systemd service below.
-- **A home PC or Raspberry Pi** that stays on: same steps.
-
-GitHub Actions cron is not a good fit. It runs every 5 minutes at best, scheduled runs often start late, and it would need extra work to save the list of already-sent news between runs.
+- **Free, no server: GitHub Actions.** `.github/workflows/news.yml` runs `bot.py --once` every 5 minutes. GitHub often starts these runs late, so alerts arrive 5–15 minutes after the news. Settings come from GitHub Secrets `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID`, and the variable `PLAYERS`. The bot's memory of sent news is saved on the `state` branch. For setup steps, see [deploy/claude-in-chrome-prompt.md](deploy/claude-in-chrome-prompt.md). A public repo gets unlimited free minutes. A private repo should use `*/30` to stay within 2,000 minutes per month.
+- **Real time (2-minute checks): any always-on Linux machine** (a VPS, Oracle Cloud Always Free, or a home PC/Raspberry Pi):
+  `git clone` the repo, then run `bash deploy/setup.sh`. It creates the config, tests it and installs the systemd service.
 
 ## Keep it running
 

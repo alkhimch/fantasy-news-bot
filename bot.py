@@ -574,6 +574,27 @@ class Bot:
 
 # --------------------------------------------------------------------------- main
 
+def load_config():
+    """config.json if present; otherwise build one from env vars (used by GitHub Actions):
+    TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, PLAYERS (comma separated, seeds the list once),
+    optional X_BEARER_TOKEN."""
+    cfg = load_json(CONFIG_PATH, None)
+    if cfg is not None:
+        return cfg
+    token = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
+    if not token:
+        return None
+    cfg = load_json(os.path.join(BASE_DIR, "config.example.json"), {})
+    cfg.setdefault("sources", {})
+    cfg["telegram"] = {"bot_token": token, "chat_id": os.environ.get("TELEGRAM_CHAT_ID", "").strip() or None}
+    cfg["players"] = [p.strip() for p in os.environ.get("PLAYERS", "").split(",") if p.strip()]
+    x_token = os.environ.get("X_BEARER_TOKEN", "").strip()
+    tw = cfg["sources"].setdefault("twitter", {})
+    tw["enabled"] = bool(x_token)
+    tw["bearer_token"] = x_token
+    return cfg
+
+
 def main():
     ap = argparse.ArgumentParser(description="Fantasy player news -> Telegram")
     ap.add_argument("--once", action="store_true", help="poll once and exit")
@@ -586,9 +607,10 @@ def main():
 
     logging.basicConfig(level=logging.DEBUG if args.verbose else logging.INFO,
                         format="%(asctime)s %(levelname)s %(message)s")
-    cfg = load_json(CONFIG_PATH, None)
+    cfg = load_config()
     if cfg is None:
-        sys.exit("No config at %s. Copy config.example.json to config.json and fill it in." % CONFIG_PATH)
+        sys.exit("No config at %s and no TELEGRAM_BOT_TOKEN env var. "
+                 "Copy config.example.json to config.json and fill it in." % CONFIG_PATH)
 
     tg = Telegram(cfg["telegram"]["bot_token"], cfg["telegram"].get("chat_id"))
     if args.get_chat_id:
