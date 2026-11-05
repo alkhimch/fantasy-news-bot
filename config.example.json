@@ -1,0 +1,33 @@
+{
+  "telegram": {
+    "bot_token": "123456789:ABC-your-token-from-BotFather",
+    "chat_id": null
+  },
+
+  "players": [
+    "Nikola Jokic",
+    "Victor Wembanyama",
+    {"name": "Shai Gilgeous-Alexander", "aliases": ["SGA"]},
+    "Jaren Jackson Jr."
+  ],
+
+  "poll_interval_seconds": 120,
+  "max_age_hours": 24,
+
+  "sources": {
+    "rotowire":     {"enabled": true},
+    "espn_fantasy": {"enabled": true},
+    "espn_news":    {"enabled": true},
+
+    "twitter": {
+      "enabled": false,
+      "bearer_token": "",
+      "interval_seconds": 300,
+      "accounts": ["ShamsCharania", "ChrisBHaynes", "Underdog__NBA", "TheSteinLine"]
+    },
+
+    "extra_rss": {
+      "feeds": []
+    }
+  }
+}
