@@ -39,6 +39,7 @@ After the bot is running, send `/status` in Telegram to see whether each source 
   - Netlify Blobs stores the player list and which news was already sent
   - sources: ESPN's feed for each tracked player (about 10 latest Rotowire blurbs per player; reliable), Rotowire RSS (only the newest 5 items league-wide), and ESPN NBA headlines. When the same blurb arrives from two sources, it's sent once.
   - ESPN returns 403 to any User-Agent that contains "bot", so don't add it.
+  - `/sources` in Telegram, or the "Эх сурвалжууд" section of the web page, shows every source, whether it is on or off, its last check time and item count, and any error.
   - Bluesky accounts: `/follow handle [all]`, `/unfollow handle` and `/following`, or the "Bluesky хаягууд" section of the web page. You get posts that mention your players, or every post in `all` mode. Defaults: `shamsbot.bsky.social` (an unofficial copy of Shams Charania's tweets) and `thesteinline.bsky.social` (Marc Stein). To replace them on first run, set the env var `FOLLOWS`. When you follow an account, its existing posts aren't sent.
   - X/Twitter can't be read for free: Nitter and XCancel are shut down, and X's embed endpoint only returns old popular tweets. So Bluesky is used instead.
 

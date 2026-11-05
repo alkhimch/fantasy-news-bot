@@ -53,6 +53,13 @@
   .fl .info { flex: 1; min-width: 0; }
   .fl select { min-width: 0; width: auto; padding: 6px 8px; }
   .chip.add { cursor: pointer; padding: 4px 10px; border: 1px dashed var(--line); background: transparent; }
+  .src { display: flex; gap: 10px; padding: 10px 2px; border-top: 1px solid var(--line); }
+  .src:first-child { border-top: 0; }
+  .dot { width: 10px; height: 10px; border-radius: 50%; margin-top: 6px; flex: none; background: var(--muted); }
+  .dot.ok { background: var(--ok); } .dot.bad { background: var(--bad); } .dot.wait { background: var(--warn); }
+  .src .name { font-weight: 600; }
+  .src .meta { color: var(--muted); font-size: 13px; }
+  .src .err { color: var(--bad); }
   .hint { color: var(--muted); font-size: 14px; padding: 8px 2px; }
   .lock { text-align: center; padding: 40px 10px; }
   .lock code { background: var(--chip); padding: 2px 6px; border-radius: 6px; }
@@ -102,6 +109,15 @@
         <button class="primary" id="followAdd">Дагах</button>
       </div>
       <div class="chips" id="suggest" style="margin-top:10px"></div>
+    </section>
+
+    <section class="card">
+      <div class="row" style="align-items:center; justify-content:space-between">
+        <h2 style="margin:0">Эх сурвалжууд</h2>
+        <button id="srcRefresh" title="Шинэчлэх">↻ Шинэчлэх</button>
+      </div>
+      <div class="list" id="sources"></div>
+      <div class="sub" style="margin-top:6px">2 минут тутам шалгана. Telegram дээр: /sources</div>
     </section>
   </div>
 </main>
@@ -156,7 +172,7 @@
       try {
         mine = await api("/api/players", { method: "PUT", body: JSON.stringify({ players: mine }) });
         flash("Хадгалсан ✓");
-        renderMine(); renderResults();
+        renderMine(); renderResults(); loadSources();
       } catch (e) { if (e.message !== "unauthorized") flash("Хадгалж чадсангүй: " + e.message, true); }
     }, 350);
   }
@@ -263,6 +279,7 @@
     try {
       follows = await api("/api/follows", { method: "PUT", body: JSON.stringify({ follows: list }) });
       flash("Хадгалсан ✓");
+      loadSources();
     } catch (e) {
       if (e.message !== "unauthorized") flash(e.message, true);
     }
@@ -278,6 +295,31 @@
   $("followAdd").addEventListener("click", addFollow);
   $("followInput").addEventListener("keydown", (e) => { if (e.key === "Enter") addFollow(); });
 
+  // ---- sources overview
+  async function loadSources() {
+    const box = $("sources");
+    let list;
+    try { list = await api("/api/sources"); }
+    catch (e) { if (e.message !== "unauthorized") box.replaceChildren(el("div", { class: "hint" }, "Ачаалж чадсангүй: " + e.message)); return; }
+    box.replaceChildren();
+    const time = (iso) => new Date(iso).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+    for (const s of list) {
+      let cls, state;
+      if (!s.enabled) { cls = ""; state = el("span", {}, "Унтраасан"); }
+      else if (!s.status) { cls = "wait"; state = el("span", {}, "Хараахан шалгаагүй"); }
+      else if (s.status.ok) { cls = "ok"; state = el("span", {}, `${s.status.items} мэдээ · ${time(s.status.at)}-д шалгасан`); }
+      else { cls = "bad"; state = el("span", { class: "err" }, `Алдаа: ${s.status.error} · ${time(s.status.at)}`); }
+      box.append(el("div", { class: "src" },
+        el("span", { class: "dot " + cls, "aria-hidden": "true" }),
+        el("div", { class: "info" },
+          el("div", { class: "name" }, s.label),
+          el("div", { class: "meta" }, state),
+          el("div", { class: "meta" }, s.mn),
+          s.detail ? el("div", { class: "meta" }, s.detail.mn) : null)));
+    }
+  }
+  $("srcRefresh").addEventListener("click", loadSources);
+
   async function start() {
     if (!k) { lock(); return; }
     $("app").hidden = false;
@@ -286,6 +328,7 @@
       mine = await api("/api/players");
       renderMine();
     } catch (e) { if (e.message !== "unauthorized") flash("Ачаалж чадсангүй: " + e.message, true); return; }
+    loadSources();
     api("/api/follows").then((f) => { follows = f; renderFollows(); })
       .catch((e) => { if (e.message !== "unauthorized") $("follows").textContent = "Ачаалж чадсангүй: " + e.message; });
     await loadRoster();

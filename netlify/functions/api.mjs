@@ -1,6 +1,6 @@
 // JSON API for the player-picker web page. Every call needs the secret key from /web.
 import { getStore } from "@netlify/blobs";
-import { getRoster, loadFollows, loadPlayers, sanitizePlayers, saveFollowsFromWeb, webKey } from "../lib/core.mjs";
+import { describeSources, getRoster, loadFollows, loadPlayers, sanitizePlayers, saveFollowsFromWeb, webKey } from "../lib/core.mjs";
 
 const json = (data, status = 200) =>
   new Response(JSON.stringify(data), { status, headers: { "Content-Type": "application/json", "Cache-Control": "no-store" } });
@@ -24,6 +24,9 @@ export default async (req) => {
       const players = sanitizePlayers(body.players);
       await store.setJSON("players", players);
       return json(players);
+    }
+    if (path === "/api/sources" && req.method === "GET") {
+      return json(await describeSources(store, env));
     }
     if (path === "/api/follows" && req.method === "GET") {
       return json(await loadFollows(store, env));

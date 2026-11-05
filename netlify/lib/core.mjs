@@ -347,10 +347,12 @@ export async function runPoll({ fetch, store, env, now = Date.now(), siteUrl, lo
     for (const r of await fetchAll(fetch, env, players, follows)) {
       if (r.status === "rejected") {
         state.status[r.name] = `ERROR ${String(r.reason?.message || r.reason).slice(0, 100)} @ ${stamp}`;
+        (state.sourceStatus ||= {})[r.name] = { ok: false, error: String(r.reason?.message || r.reason).slice(0, 100), at: new Date(now).toISOString() };
         log.warn(r.name, "failed:", r.reason?.message);
         continue;
       }
       state.status[r.name] = `ok ${r.value.length} items @ ${stamp}`;
+      (state.sourceStatus ||= {})[r.name] = { ok: true, items: r.value.length, at: new Date(now).toISOString() };
       for (const item of [...r.value].reverse()) { // oldest first
         const key = sha1(item.source.split(" ")[0] + "|" + item.id);
         if (seen.has(key)) continue;
@@ -416,7 +418,7 @@ export async function runTestAlerts({ fetch, store, env, limit = 3 }) {
 // -------------------------------------------------------------- commands
 const HELP =
   "/list – tracked players\n/add Name[, Name2] – track (aliases: Name (Nick))\n" +
-  "/remove Name – untrack\n/web – link to pick players on the website\n" +
+  "/remove Name – untrack\n/web – link to pick players on the website\n/sources – all news sources and their health\n" +
   "/follow handle [all] – follow a Bluesky account (posts about your players; 'all' = every post)\n" +
   "/unfollow handle – stop following\n/following – followed accounts\n" +
   "/status – source health\n/test – check sources + send sample alerts";
@@ -449,6 +451,8 @@ export async function handleUpdate({ update, fetch, store, env }) {
   } else if (cmd === "/list") {
     const names = players.map((p) => p.name + (p.aliases.length ? ` (${p.aliases.join("/")})` : "")).sort();
     reply = names.length ? `Tracking ${names.length} players:\n` + names.map((n) => "• " + n).join("\n") : "No players yet. /add Name";
+  } else if (cmd === "/sources") {
+    reply = formatSources(await describeSources(store, env));
   } else if (cmd === "/status") {
     const st = await loadState(store);
     reply = Object.entries(st.status).map(([k, v]) => `${k}: ${v}`).join("\n") || "No polls yet.";
@@ -612,4 +616,60 @@ export async function saveFollowsFromWeb({ fetch, store, env, list }) {
   }
   await store.setJSON("follows", out);
   return out;
+}
+
+// ------------------------------------------------------------- /sources
+export const SOURCE_INFO = {
+  rotowire: { label: "Rotowire RSS", en: "Newest 5 Rotowire blurbs league-wide (backup)",
+              mn: "Rotowire-ийн NBA-ийн хамгийн сүүлийн 5 мэдээ (нөөц)" },
+  espn_player: { label: "ESPN player feeds", en: "Latest ~10 Rotowire blurbs + ESPN stories for each of your players",
+                 mn: "Таны тоглогч бүрийн Rotowire-ийн сүүлийн ~10 мэдээ + ESPN нийтлэл" },
+  bluesky: { label: "Bluesky", en: "Posts from the Bluesky accounts you follow",
+             mn: "Таны дагасан Bluesky хаягуудын пост" },
+  espn_news: { label: "ESPN NBA news", en: "ESPN headline stories (videos, recaps and previews skipped)",
+               mn: "ESPN-ий гол нийтлэлүүд (видео, тойм, урьдчилсан тойм алгасна)" },
+};
+
+export async function describeSources(store, env) {
+  const state = await loadState(store);
+  const players = await loadPlayers(store, env);
+  const follows = await loadFollows(store, env);
+  const enabled = new Set(sourceList(env, players, follows).map(([n]) => n));
+  const all = sourceList({ ...env, DISABLE_SOURCES: "" }, players, follows).map(([n]) => n);
+  const extra = (env.EXTRA_RSS || "").split(",").map((x) => x.trim()).filter(Boolean);
+  return all.map((name) => {
+    const info = SOURCE_INFO[name] || { label: name, en: "Extra RSS feed", mn: "Нэмэлт RSS" };
+    let detail = null;
+    if (name === "espn_player") {
+      const linked = players.filter((p) => p.espnId).length;
+      const missing = players.filter((p) => !p.espnId).map((p) => p.name);
+      detail = { en: `${linked}/${players.length} players linked to ESPN` + (missing.length ? ` (not linked: ${missing.join(", ")})` : ""),
+                 mn: `${linked}/${players.length} тоглогч ESPN-тэй холбогдсон` + (missing.length ? ` (холбогдоогүй: ${missing.join(", ")})` : "") };
+    } else if (name === "bluesky") {
+      const list = follows.map((f) => "@" + f.handle.replace(/\.bsky\.social$/, "") + (f.mode === "all" ? " (all)" : ""));
+      detail = { en: list.length ? list.join(", ") : "not following anyone", mn: list.length ? list.join(", ").replace(/\(all\)/g, "(бүх пост)") : "хэнийг ч дагаагүй" };
+    } else if (name.startsWith("extra_")) {
+      const raw = extra[Number(name.slice(6)) - 1] || "";
+      const label = raw.includes("|") ? raw.split("|")[0].trim() : raw.replace(/^https?:\/\//, "").split("/")[0];
+      info.label = label || name;
+    }
+    return { name, label: info.label, en: info.en, mn: info.mn, enabled: enabled.has(name),
+             status: state.sourceStatus?.[name] || null, detail };
+  });
+}
+
+export function formatSources(list) {
+  const hhmm = (iso) => iso.slice(11, 16) + " UTC";
+  const lines = ["📡 News sources"];
+  for (const s of list) {
+    let head;
+    if (!s.enabled) head = `⏸ ${s.label} – off`;
+    else if (!s.status) head = `⏳ ${s.label} – not checked yet`;
+    else if (s.status.ok) head = `✅ ${s.label} – ${s.status.items} items @ ${hhmm(s.status.at)}`;
+    else head = `❌ ${s.label} – ${s.status.error} @ ${hhmm(s.status.at)}`;
+    lines.push("", head, "   " + s.en);
+    if (s.detail) lines.push("   " + s.detail.en);
+  }
+  lines.push("", "Checked every 2 minutes. Manage: /follow, /add, /web");
+  return lines.join("\n");
 }
