@@ -1,0 +1,14 @@
+{
+  "name": "fantasy-news-bot",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test test/*.test.mjs"
+  },
+  "dependencies": {
+    "@netlify/blobs": "^11.1.7"
+  },
+  "engines": {
+    "node": ">=22.12"
+  }
+}

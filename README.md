@@ -32,7 +32,13 @@ After the bot is running, send `/status` in Telegram to see whether each source 
 
 ## Where to run it
 
-- **Free, no server: GitHub Actions.** `.github/workflows/news.yml` runs `bot.py --once` every 5 minutes. GitHub often starts these runs late, so alerts arrive 5–15 minutes after the news. Settings come from GitHub Secrets `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID`, and the variable `PLAYERS`. The bot's memory of sent news is saved on the `state` branch. For setup steps, see [deploy/claude-in-chrome-prompt.md](deploy/claude-in-chrome-prompt.md). A public repo gets unlimited free minutes. A private repo should use `*/30` to stay within 2,000 minutes per month.
+- **Free, recommended: Netlify.** The `netlify/` folder has a JavaScript version of the bot:
+  - a scheduled function checks the news every 2 minutes
+  - a Telegram webhook answers `/add`, `/remove`, `/list`, `/status` and `/test` instantly
+  - Netlify Blobs stores the player list and which news was already sent
+
+  Set the environment variables `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID` and `PLAYERS` in Netlify. For step-by-step setup, see [deploy/claude-in-chrome-prompt.md](deploy/claude-in-chrome-prompt.md). Run the tests with `npm test`.
+- **Manual fallback: GitHub Actions.** `.github/workflows/news.yml` runs `bot.py --once` every 5 minutes. GitHub often starts these runs late, so alerts arrive 5–15 minutes after the news. Settings come from GitHub Secrets `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID`, and the variable `PLAYERS`. The bot's memory of sent news is saved on the `state` branch. A public repo gets unlimited free minutes. A private repo should use `*/30` to stay within 2,000 minutes per month.
 - **Real time (2-minute checks): any always-on Linux machine** (a VPS, Oracle Cloud Always Free, or a home PC/Raspberry Pi):
   `git clone` the repo, then run `bash deploy/setup.sh`. It creates the config, tests it and installs the systemd service.
 

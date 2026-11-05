@@ -1,8 +1,10 @@
 name: fantasy-news
 
+# The bot now runs on Netlify (netlify/functions). This workflow is a manual fallback only.
+# Don't re-enable the schedule while Netlify is running, or you'll get duplicate alerts.
 on:
-  schedule:
-    - cron: "*/5 * * * *"   # GitHub's minimum; real runs are often 5-15 min apart
+  # schedule:
+  #   - cron: "*/5 * * * *"
   workflow_dispatch:
     inputs:
       mode:
