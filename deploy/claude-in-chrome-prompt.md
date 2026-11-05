@@ -71,7 +71,8 @@ PART 4 - Verify
 FINAL REPORT
 Summarize: the project URL, that both functions exist, the poll log lines, and my Telegram test results.
 Remind me:
-- Manage players in Telegram: /add Name, /add Name (Nickname), /remove Name, /list, /status, /test
+- Pick players on the website: the bot sends a private link in Telegram (or send /web to get it again)
+- Or manage players in Telegram: /add Name, /add Name (Nickname), /remove Name, /list, /status, /test
 - Check free-plan usage once after a day: Netlify -> Team -> Usage / Billing.
 - New code pushed to GitHub main deploys automatically.
 ```

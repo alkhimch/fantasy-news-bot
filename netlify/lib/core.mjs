@@ -97,14 +97,18 @@ export function parseRss(xml, source) {
 function espnItems(list, source) {
   return (list || []).map((a) => {
     const names = [];
+    const ids = [];
     for (const ath of a.athletes || []) {
       const n = ath.fullName || ath.displayName || ath.description;
       if (n) names.push(n);
+      if (ath.id != null) ids.push(String(ath.id));
     }
     for (const c of a.categories || []) {
       if (c.type === "athlete") {
         const n = c.description || c.athlete?.description;
         if (n) names.push(n);
+        const id = c.athleteId ?? c.athlete?.id;
+        if (id != null) ids.push(String(id));
       }
     }
     return {
@@ -115,6 +119,7 @@ function espnItems(list, source) {
       url: a.links?.web?.href || "",
       published: parseDate(a.published || a.lastModified),
       names,
+      ids,
     };
   });
 }
@@ -159,6 +164,9 @@ export const send = (fetch, env, text) =>
     chat_id: env.TELEGRAM_CHAT_ID, text: text.slice(0, 4096), parse_mode: "HTML", disable_web_page_preview: true,
   });
 
+export const webKey = (env) => sha1("fnb-web:" + env.TELEGRAM_BOT_TOKEN).slice(0, 24);
+export const webLink = (siteUrl, env) => `${siteUrl}/?key=${webKey(env)}`;
+
 export const webhookSecret = (env) => sha1("fnb-webhook:" + env.TELEGRAM_BOT_TOKEN).slice(0, 32);
 
 export function formatItem(item, hits) {
@@ -173,7 +181,9 @@ export function formatItem(item, hits) {
 }
 
 function hitsFor(players, item) {
-  const hits = [...item.names.flatMap((n) => matchPlayers(players, n)),
+  const ids = new Set(item.ids || []);
+  const hits = [...players.filter((p) => p.espnId && ids.has(p.espnId)).map((p) => p.name),
+                ...item.names.flatMap((n) => matchPlayers(players, n)),
                 ...matchPlayers(players, item.title + " " + item.body)];
   return [...new Set(hits)];
 }
@@ -203,6 +213,13 @@ export async function runPoll({ fetch, store, env, now = Date.now(), siteUrl, lo
       state.webhookUrl = siteUrl + "/telegram";
       log.log("webhook set to", state.webhookUrl);
     } catch (e) { log.warn("setWebhook failed:", e.message); }
+  }
+
+  if (siteUrl && state.webLinkSentFor !== siteUrl) {
+    try {
+      await send(fetch, env, `⚙️ Тоглогчоо вебээр сонгох:\n${escapeHtml(webLink(siteUrl, env))}\n(Энэ линкийг хэнд ч бүү өг. Дахин авах: /web)`);
+      state.webLinkSentFor = siteUrl;
+    } catch (e) { log.warn("web link send failed:", e.message); }
   }
 
   const players = await loadPlayers(store, env);
@@ -267,7 +284,7 @@ export async function runTestAlerts({ fetch, store, env, limit = 3 }) {
 // -------------------------------------------------------------- commands
 const HELP =
   "/list – tracked players\n/add Name[, Name2] – track (aliases: Name (Nick))\n" +
-  "/remove Name – untrack\n/status – source health\n/test – check sources + send sample alerts";
+  "/remove Name – untrack\n/web – link to pick players on the website\n/status – source health\n/test – check sources + send sample alerts";
 
 export async function handleUpdate({ update, fetch, store, env }) {
   // Telegram retries if we're slow; process each update_id only once.
@@ -301,6 +318,10 @@ export async function handleUpdate({ update, fetch, store, env }) {
     const st = await loadState(store);
     reply = Object.entries(st.status).map(([k, v]) => `${k}: ${v}`).join("\n") || "No polls yet.";
     reply += `\nLast run: ${st.lastRun || "never"}`;
+  } else if (cmd === "/web") {
+    const st = await loadState(store);
+    const site = (st.webhookUrl || "").replace(/\/telegram$/, "");
+    reply = site ? `⚙️ ${webLink(site, env)}` : "Site URL not known yet – wait for the first scheduled run.";
   } else if (cmd === "/test") {
     await runTestAlerts({ fetch, store, env });
     return "test";
@@ -309,4 +330,78 @@ export async function handleUpdate({ update, fetch, store, env }) {
   }
   await send(fetch, env, escapeHtml(reply));
   return cmd;
+}
+
+// ------------------------------------------------------------- roster (web UI)
+const TEAMS_URL = "https://site.api.espn.com/apis/site/v2/sports/basketball/nba/teams";
+const rosterUrl = (id) => `https://site.api.espn.com/apis/site/v2/sports/basketball/nba/teams/${id}/roster`;
+const ROSTER_MAX_AGE_MS = 12 * 3600 * 1000;
+
+export async function fetchRoster(fetch) {
+  let teams = [];
+  try {
+    const d = JSON.parse(await get(fetch, TEAMS_URL));
+    teams = (d.sports?.[0]?.leagues?.[0]?.teams || []).map((t) => t.team).filter(Boolean)
+      .map((t) => ({ id: String(t.id), abbr: t.abbreviation || "", name: t.displayName || t.name || "" }));
+  } catch { /* fall back to ESPN's fixed NBA team ids 1..30 */ }
+  if (!teams.length) teams = Array.from({ length: 30 }, (_, i) => ({ id: String(i + 1), abbr: "", name: "" }));
+
+  const results = await Promise.allSettled(teams.map((t) => get(fetch, rosterUrl(t.id)).then(JSON.parse)));
+  const players = [];
+  const outTeams = [];
+  results.forEach((r, i) => {
+    if (r.status !== "fulfilled") return;
+    const d = r.value;
+    const abbr = teams[i].abbr || d.team?.abbreviation || "";
+    outTeams.push({ abbr, name: teams[i].name || d.team?.displayName || abbr });
+    let list = d.athletes || [];
+    if (list.some((g) => Array.isArray(g.items))) list = list.flatMap((g) => g.items || []); // grouped format
+    for (const a of list) {
+      const name = a.fullName || a.displayName;
+      if (!name) continue;
+      players.push({
+        id: String(a.id ?? ""), name, team: abbr,
+        pos: a.position?.abbreviation || "",
+        headshot: a.headshot?.href || "",
+        injury: a.injuries?.[0]?.status || "",
+      });
+    }
+  });
+  return { players, teams: outTeams, teamCount: teams.length };
+}
+
+export async function getRoster({ fetch, store, now = Date.now(), force = false }) {
+  const cached = await store.get("roster", { type: "json" });
+  if (!force && cached?.players?.length && now - cached.updatedAt < ROSTER_MAX_AGE_MS) return cached;
+  const r = await fetchRoster(fetch);
+  // accept only a (nearly) complete league; otherwise keep the old copy
+  if (r.teams.length < r.teamCount - 5 || r.players.length < 100) {
+    if (cached?.players?.length) return cached;
+    if (!r.players.length) throw new Error("could not load NBA rosters from ESPN");
+  }
+  const roster = {
+    updatedAt: now,
+    players: r.players.sort((a, b) => a.name.localeCompare(b.name)),
+    teams: r.teams.sort((a, b) => a.abbr.localeCompare(b.abbr)),
+  };
+  await store.setJSON("roster", roster);
+  return roster;
+}
+
+// validate a player list coming from the web page
+export function sanitizePlayers(list) {
+  if (!Array.isArray(list)) throw new Error("players must be an array");
+  const out = [];
+  for (const p of list.slice(0, 300)) {
+    const name = String(p?.name ?? "").replace(/\s+/g, " ").trim().slice(0, 80);
+    if (!name || findPlayer(out, name)) continue;
+    const entry = {
+      name,
+      aliases: (Array.isArray(p.aliases) ? p.aliases : []).map((a) => String(a).trim().slice(0, 40)).filter(Boolean).slice(0, 5),
+    };
+    if (p.espnId) entry.espnId = String(p.espnId).replace(/\D/g, "").slice(0, 12);
+    if (p.team) entry.team = String(p.team).replace(/[^A-Za-z]/g, "").slice(0, 4);
+    out.push(entry);
+  }
+  return out;
 }

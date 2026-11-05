@@ -53,7 +53,9 @@ test("poll: first run silent, then alerts once, webhook set once, errors recorde
   const w = world(); const store = memStore();
   const r0 = await core.runPoll({ fetch: w.fetch, store, env, siteUrl: "https://x.netlify.app", log: { log() {}, warn() {}, error() {} } });
   assert.equal(r0.sent, 0);
-  assert.deepEqual(w.tgCalls, ["setWebhook"]);
+  assert.deepEqual(w.tgCalls, ["setWebhook", "sendMessage"]);   // webhook + one-time web link
+  assert.ok(w.sent[0].includes("/?key="));
+  w.sent.length = 0;
   w.round = 1;
   const r1 = await core.runPoll({ fetch: w.fetch, store, env, siteUrl: "https://x.netlify.app", log: { log() {}, warn() {}, error() {} } });
   assert.equal(r1.sent, 2, w.sent.join("\n---\n"));

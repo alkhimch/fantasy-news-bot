@@ -35,6 +35,7 @@ After the bot is running, send `/status` in Telegram to see whether each source 
 - **Free, recommended: Netlify.** The `netlify/` folder has a JavaScript version of the bot:
   - a scheduled function checks the news every 2 minutes
   - a Telegram webhook answers `/add`, `/remove`, `/list`, `/status` and `/test` instantly
+  - a web page lets you pick players from every current NBA roster (loaded from ESPN, refreshed every 12 hours). Send `/web` to the bot to get its private link. The bot also sends the link once, the first time it runs.
   - Netlify Blobs stores the player list and which news was already sent
 
   Set the environment variables `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID` and `PLAYERS` in Netlify. For step-by-step setup, see [deploy/claude-in-chrome-prompt.md](deploy/claude-in-chrome-prompt.md). Run the tests with `npm test`.
