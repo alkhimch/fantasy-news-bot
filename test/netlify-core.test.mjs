@@ -83,13 +83,13 @@ test("commands: owner only, dedupe retries, add/remove/list/test", async () => {
   assert.equal(await upd(2, "/add LeBron James"), "duplicate");
   await upd(3, "/remove sga");
   await upd(4, "/list");
-  assert.equal(w.sent[0], "Added: LeBron James");
-  assert.equal(w.sent[1], "Removed Shai Gilgeous-Alexander.");
+  assert.equal(w.sent[0], "Нэмлээ: LeBron James");
+  assert.equal(w.sent[1], "Хаслаа: Shai Gilgeous-Alexander");
   assert.ok(w.sent[2].includes("LeBron James (King)") && !w.sent[2].includes("Hacker"));
   w.sent.length = 0;
   await upd(5, "/test");
-  assert.ok(w.sent[0].startsWith("🧪 Source check") && w.sent[0].includes("espn_news: ERROR"));
-  assert.ok(w.sent.slice(1).every((s) => s.startsWith("🧪 TEST")) && w.sent.length >= 2);
+  assert.ok(w.sent[0].startsWith("🧪 Эх сурвалжийн шалгалт") && w.sent[0].includes("espn_news: алдаа – HTTP 503"));
+  assert.ok(w.sent.slice(1).every((s) => s.startsWith("🧪 ТЕСТ")) && w.sent.length >= 2);
   assert.ok(!w.sent[0].includes("espn_fantasy"), "espn_fantasy source removed");
 });
 

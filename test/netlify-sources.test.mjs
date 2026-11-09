@@ -43,13 +43,13 @@ test("/sources: statuses after a poll, disabled source, extra feed label, player
 
   await core.handleUpdate({ update: { update_id: 1, message: { chat: { id: 42 }, text: "/sources" } }, fetch: f, store, env });
   const msg = sent.at(-1);
-  assert.match(msg, /^📡 News sources/);
-  assert.match(msg, /✅ Rotowire RSS – 1 items @ \d\d:\d\d UTC/);
-  assert.match(msg, /✅ ESPN player feeds – 0 items/);
-  assert.match(msg, /1\/2 players linked to ESPN \(not linked: Some Rookie\)/);
-  assert.match(msg, /⏸ ESPN NBA news – off/);
-  assert.match(msg, /❌ Hoops Hype – HTTP 503/);
-  assert.match(msg, /@shamsbot, @thesteinline \(all\)/);
+  assert.match(msg, /^📡 Мэдээний эх сурвалжууд/);
+  assert.match(msg, /✅ Rotowire RSS – 1 мэдээ · \d\d:\d\d UTC/);
+  assert.match(msg, /✅ ESPN player feeds – 0 мэдээ/);
+  assert.match(msg, /1\/2 тоглогч ESPN-тэй холбогдсон \(холбогдоогүй: Some Rookie\)/);
+  assert.match(msg, /⏸ ESPN NBA news – унтраастай/);
+  assert.match(msg, /❌ Hoops Hype – алдаа: HTTP 503/);
+  assert.match(msg, /@shamsbot, @thesteinline \(бүх пост\)/);
 });
 
 test("/sources before first poll shows 'not checked yet'; /help lists /sources", async () => {
@@ -57,8 +57,21 @@ test("/sources before first poll shows 'not checked yet'; /help lists /sources",
   const store = memStore(); const sent = [];
   const f = async (url, opts) => { sent.push(JSON.parse(opts.body).text); return { ok: true, json: async () => ({ ok: true }) }; };
   await core.handleUpdate({ update: { update_id: 1, message: { chat: { id: 42 }, text: "/sources" } }, fetch: f, store, env });
-  assert.match(sent[0], /⏳ Rotowire RSS – not checked yet/);
+  assert.match(sent[0], /⏳ Rotowire RSS – хараахан шалгаагүй/);
   await core.handleUpdate({ update: { update_id: 2, message: { chat: { id: 42 }, text: "/help" } }, fetch: f, store, env });
   assert.match(sent[1], /\/sources – мэдээний эх сурвалжууд/);
   assert.match(sent[1], /Админ:\n\/admin – /, "owner also sees admin commands");
+});
+
+test("/status in Mongolian; alerts link says Нээх", async () => {
+  const env = { TELEGRAM_BOT_TOKEN: "T", TELEGRAM_CHAT_ID: "42", PLAYERS: "Nikola Jokic" };
+  const store = memStore(); const sent = [];
+  const f = async (url, opts) => { sent.push(JSON.parse(opts.body).text); return { ok: true, json: async () => ({ ok: true }) }; };
+  await core.handleUpdate({ update: { update_id: 1, message: { chat: { id: 42 }, text: "/status" } }, fetch: f, store, env });
+  assert.equal(sent[0], "Хараахан шалгаагүй байна.\nСүүлд шалгасан: хараахан үгүй");
+  await store.setJSON("state", { seen: [], status: {}, lastRun: "2026-11-10T03:04:00.000Z",
+    sourceStatus: { rotowire: { ok: true, items: 5, at: "2026-11-10T03:04:00.000Z" }, espn_news: { ok: false, error: "HTTP 503", at: "2026-11-10T03:04:00.000Z" } } });
+  await core.handleUpdate({ update: { update_id: 2, message: { chat: { id: 42 }, text: "/status" } }, fetch: f, store, env });
+  assert.equal(sent[1], "✅ rotowire: 5 мэдээ · 03:04 UTC\n❌ espn_news: алдаа – HTTP 503 · 03:04 UTC\nСүүлд шалгасан: 03:04 UTC");
+  assert.match(core.formatItem({ source: "ESPN", title: "x", body: "", url: "https://e/1", names: [] }, ["Nikola Jokic"]), /<a href="https:\/\/e\/1">Нээх<\/a>$/);
 });

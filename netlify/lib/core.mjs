@@ -176,11 +176,11 @@ const bskyFeedUrl = (actor, limit) =>
 
 export async function resolveBsky(fetch, input) {
   const h = normalizeHandle(input);
-  if (!h) throw new Error(`"${input}" is not a Bluesky handle`);
+  if (!h) throw new Error(`"${input}" нь Bluesky хаяг биш байна`);
   let p;
   try { p = JSON.parse(await get(fetch, `${BSKY}/app.bsky.actor.getProfile?actor=${encodeURIComponent(h)}`)); }
-  catch { throw new Error(`Bluesky account not found: ${h}`); }
-  if (!p?.did) throw new Error(`Bluesky account not found: ${h}`);
+  catch { throw new Error(`Bluesky хаяг олдсонгүй: ${h}`); }
+  if (!p?.did) throw new Error(`Bluesky хаяг олдсонгүй: ${h}`);
   let lastPostAt = null;
   try {
     const f = JSON.parse(await get(fetch, bskyFeedUrl(p.did, 5)));
@@ -325,7 +325,7 @@ export function formatItem(item, hits) {
   if (body.length > 900) body = body.slice(0, 900).replace(/\s+\S*$/, "") + "…";
   if (body) lines.push(escapeHtml(body));
   if (item.published) lines.push(`<i>${item.published.toISOString().slice(0, 16).replace("T", " ")} UTC</i>`);
-  if (item.url) lines.push(`<a href="${escapeHtml(item.url)}">Open</a>`);
+  if (item.url) lines.push(`<a href="${escapeHtml(item.url)}">Нээх</a>`);
   return lines.join("\n");
 }
 
@@ -405,14 +405,14 @@ export function parseExpiry(v) {
   if (v == null || v === "") return null;
   const s = String(v).trim();
   const d = /^\d{4}-\d{2}-\d{2}$/.test(s) ? new Date(s + "T23:59:59+08:00") : new Date(s);
-  if (isNaN(d)) throw new Error(`bad date: ${s}`);
+  if (isNaN(d)) throw new Error(`Огноо буруу байна: ${s}`);
   return d.toISOString();
 }
 
 // Owner action from the admin page or /approve /block: change a user's access; tells the user when opened.
 export async function setUserAccess({ fetch, store, env, chatId, status, expiresAt, note, now = Date.now(), log = console }) {
   const id = String(chatId);
-  if (status != null && !["pending", "active", "expired", "blocked"].includes(status)) throw new Error(`bad status: ${status}`);
+  if (status != null && !["pending", "active", "expired", "blocked"].includes(status)) throw new Error(`Төлөв буруу байна: ${status}`);
   const exp = expiresAt === undefined ? undefined : parseExpiry(expiresAt);
   const { before, user } = await updateUsers(store, (users) => {
     const u = users[id];
@@ -424,7 +424,7 @@ export async function setUserAccess({ fetch, store, env, chatId, status, expires
     if (u.status === "active" && !isActive(before, now)) u.activatedAt = new Date(now).toISOString();
     return { before, user: { ...u } };
   });
-  if (!user) throw new Error(`unknown user: ${id}`);
+  if (!user) throw new Error(`Хэрэглэгч олдсонгүй: ${id}`);
   if (isActive(user, now) && !isActive(before, now)) {
     const site = ((await loadState(store)).webhookUrl || "").replace(/\/telegram$/, "");
     const lines = [`✅ Таны эрх нээгдлээ!${user.expiresAt ? ` (${fmtDate(user.expiresAt)} хүртэл)` : ""}`, ""];
@@ -546,7 +546,7 @@ export async function runPoll({ fetch, store, env, now = Date.now(), siteUrl, lo
       try { await send(fetch, env, msg, a.id); n++; } catch (e) { log.error("send to", a.id, "failed:", e.message); }
     }
     if (a.outbox.length > MAX_ALERTS_PER_RUN) {
-      await send(fetch, env, `…and ${a.outbox.length - MAX_ALERTS_PER_RUN} more updates.`, a.id).catch(() => {});
+      await send(fetch, env, `…бас ${a.outbox.length - MAX_ALERTS_PER_RUN} мэдээ байна.`, a.id).catch(() => {});
     }
     if (a.sentList.length > MAX_SENT_CONTENT) state.sentBy[a.id] = a.sentList.slice(-MAX_SENT_CONTENT);
     return n;
@@ -598,12 +598,12 @@ export async function runTestAlerts({ fetch, store, env, limit = 3, chatId = own
   const lines = [];
   const found = [];
   for (const r of await fetchAll(fetch, env, players, follows)) {
-    if (r.status === "rejected") { lines.push(`${r.name}: ERROR ${r.reason?.message}`); continue; }
+    if (r.status === "rejected") { lines.push(`${r.name}: алдаа – ${r.reason?.message}`); continue; }
     const m = r.value.map((i) => [i, hitsFor(players, i)]).filter(([, h]) => h.length);
-    lines.push(`${r.name}: ok, ${r.value.length} items, ${m.length} about your players`);
+    lines.push(`${r.name}: ok, ${r.value.length} мэдээ, таны тоглогчийн тухай ${m.length}`);
     found.push(...m);
   }
-  await send(fetch, env, "🧪 Source check\n" + escapeHtml(lines.join("\n")), chatId);
+  await send(fetch, env, "🧪 Эх сурвалжийн шалгалт\n" + escapeHtml(lines.join("\n")), chatId);
   const keysSeen = new Set();
   const unique = found.filter(([item]) => {
     const keys = contentKeys(item);
@@ -614,9 +614,9 @@ export async function runTestAlerts({ fetch, store, env, limit = 3, chatId = own
   found.length = 0; found.push(...unique);
   found.sort((a, b) => (b[0].published?.getTime() || 0) - (a[0].published?.getTime() || 0));
   if (!found.length) {
-    await send(fetch, env, "No current news mentions your players. Try /add a player who is in today's news.", chatId);
+    await send(fetch, env, "Одоогоор таны тоглогчдын тухай мэдээ алга. Өнөөдөр мэдээнд гарсан тоглогчийг /add хийж туршаад үзээрэй.", chatId);
   }
-  for (const [item, hits] of found.slice(0, limit)) await send(fetch, env, "🧪 TEST\n" + formatItem(item, hits), chatId);
+  for (const [item, hits] of found.slice(0, limit)) await send(fetch, env, "🧪 ТЕСТ\n" + formatItem(item, hits), chatId);
   return lines;
 }
 
@@ -662,26 +662,26 @@ async function gate({ fetch, store, env, msg, now, log }) {
 async function ownerCommand({ fetch, store, env, cmd, arg, now }) {
   if (cmd === "/admin") {
     const site = ((await loadState(store)).webhookUrl || "").replace(/\/telegram$/, "");
-    return site ? `🔐 ${adminLink(site, env)}` : "Site URL not known yet – wait for the first scheduled run.";
+    return site ? `🔐 ${adminLink(site, env)}` : "Сайтын хаяг хараахан тодорхойгүй – эхний автомат шалгалтыг (2 минут) хүлээнэ үү.";
   }
   if (cmd === "/users") {
     const list = await listUsers(store, env, now);
-    if (!list.length) return "No customers yet. They appear here after they message the bot.";
+    if (!list.length) return "Одоогоор хэрэглэгч алга. Хүн ботод бичихэд энд гарч ирнэ.";
     const icon = { pending: "🕓", active: "✅", expired: "⌛", blocked: "⛔" };
     return list.map((u) => `${icon[u.status] || "•"} ${userLabel(u)} – ${u.chatId}` +
-      (u.expiresAt ? ` – until ${fmtDate(u.expiresAt)}` : "") + ` – ${u.players} players`).join("\n");
+      (u.expiresAt ? ` – ${fmtDate(u.expiresAt)} хүртэл` : "") + ` – ${u.players} тоглогч`).join("\n");
   }
   if (cmd === "/approve" || cmd === "/block") {
     const [id, days] = arg.split(/\s+/);
-    if (!/^\d+$/.test(id || "")) return `Usage: ${cmd} <id>${cmd === "/approve" ? " [days]" : ""}`;
-    if (days && !/^\d+$/.test(days)) return "Days must be a number, e.g. /approve 12345 30";
+    if (!/^\d+$/.test(id || "")) return `Хэрэглээ: ${cmd} ID${cmd === "/approve" ? " [хоног]" : ""}`;
+    if (days && !/^\d+$/.test(days)) return "Хоног тоо байх ёстой, жишээ нь: /approve 12345 30";
     try {
       const u = await setUserAccess({ fetch, store, env, chatId: id, now,
         status: cmd === "/approve" ? "active" : "blocked",
         expiresAt: cmd === "/approve" ? (days ? new Date(now + Number(days) * 864e5).toISOString() : null) : undefined });
       return cmd === "/approve"
-        ? `✅ Opened: ${userLabel(u)}${u.expiresAt ? ` until ${fmtDate(u.expiresAt)}` : " (no expiry)"}`
-        : `⛔ Blocked: ${userLabel(u)}`;
+        ? `✅ Эрх нээлээ: ${userLabel(u)}${u.expiresAt ? ` (${fmtDate(u.expiresAt)} хүртэл)` : " (хугацаагүй)"}`
+        : `⛔ Эрх хаалаа: ${userLabel(u)}`;
     } catch (e) { return e.message; }
   }
   return null;
@@ -720,20 +720,22 @@ export async function handleUpdate({ update, fetch, store, env, now = Date.now()
     const added = [];
     for (const p of parsePlayerList(arg)) if (!findPlayer(players, p.name)) { players.push(p); added.push(p.name); }
     await savePlayers(store, env, chatId, players);
-    reply = added.length ? "Added: " + added.join(", ") : "Already tracked.";
+    reply = added.length ? "Нэмлээ: " + added.join(", ") : "Аль хэдийн нэмсэн байна.";
   } else if ((cmd === "/remove" || cmd === "/rm") && arg) {
     const p = findPlayer(players, arg);
     if (p) { players = players.filter((x) => x !== p); await savePlayers(store, env, chatId, players); }
-    reply = p ? `Removed ${p.name}.` : `Not tracked: ${arg}`;
+    reply = p ? `Хаслаа: ${p.name}` : `Жагсаалтад алга: ${arg}`;
   } else if (cmd === "/list") {
     const names = players.map((p) => p.name + (p.aliases.length ? ` (${p.aliases.join("/")})` : "")).sort();
-    reply = names.length ? `Tracking ${names.length} players:\n` + names.map((n) => "• " + n).join("\n") : "No players yet. /add Name";
+    reply = names.length ? `Таны тоглогчид (${names.length}):\n` + names.map((n) => "• " + n).join("\n") : "Тоглогч алга. Нэмэх: /add Нэр";
   } else if (cmd === "/sources") {
     reply = formatSources(await describeSources(store, env, chatId));
   } else if (cmd === "/status") {
     const st = await loadState(store);
-    reply = Object.entries(st.status).map(([k, v]) => `${k}: ${v}`).join("\n") || "No polls yet.";
-    reply += `\nLast run: ${st.lastRun || "never"}`;
+    const hhmm = (iso) => iso.slice(11, 16) + " UTC";
+    reply = Object.entries(st.sourceStatus || {}).map(([k, v]) => (v.ok
+      ? `✅ ${k}: ${v.items} мэдээ · ${hhmm(v.at)}` : `❌ ${k}: алдаа – ${v.error} · ${hhmm(v.at)}`)).join("\n") || "Хараахан шалгаагүй байна.";
+    reply += `\nСүүлд шалгасан: ${st.lastRun ? hhmm(st.lastRun) : "хараахан үгүй"}`;
   } else if (cmd === "/follow" && arg) {
     reply = await followCommand({ fetch, store, env, arg, chatId });
   } else if (cmd === "/unfollow" && arg) {
@@ -741,17 +743,17 @@ export async function handleUpdate({ update, fetch, store, env, now = Date.now()
     const h = normalizeHandle(arg);
     const f = follows.find((x) => x.handle === h || x.did === h);
     if (f) await store.setJSON(followsKey(env, chatId), follows.filter((x) => x !== f));
-    reply = f ? `Unfollowed @${f.handle}.` : `Not following: ${arg}`;
+    reply = f ? `Дагахаа болилоо: @${f.handle}` : `Дагаагүй байна: ${arg}`;
   } else if (cmd === "/following" || cmd === "/follow") {
     const follows = await loadFollows(store, env, chatId);
     reply = follows.length
-      ? "Following on Bluesky:\n" + follows.map((f) => `• @${f.handle}${f.name ? ` (${f.name})` : ""} – ${f.mode === "all" ? "every post" : "your players only"}`).join("\n")
-      : "Not following anyone.";
-    reply += "\n\nAdd: /follow shamsbot.bsky.social  (add 'all' for every post)";
+      ? "Дагаж буй Bluesky хаягууд:\n" + follows.map((f) => `• @${f.handle}${f.name ? ` (${f.name})` : ""} – ${f.mode === "all" ? "бүх пост" : "зөвхөн таны тоглогчид"}`).join("\n")
+      : "Хэнийг ч дагаагүй байна.";
+    reply += "\n\nНэмэх: /follow shamsbot.bsky.social  (бүх пост авах бол ард нь all)";
   } else if (cmd === "/web") {
     const st = await loadState(store);
     const site = (st.webhookUrl || "").replace(/\/telegram$/, "");
-    reply = site ? `⚙️ ${webLink(site, env, chatId)}` : "Site URL not known yet – wait for the first scheduled run.";
+    reply = site ? `⚙️ ${webLink(site, env, chatId)}` : "Сайтын хаяг хараахан тодорхойгүй – эхний автомат шалгалтыг (2 минут) хүлээнэ үү.";
   } else if (cmd === "/test") {
     await runTestAlerts({ fetch, store, env, chatId });
     return "test";
@@ -807,7 +809,7 @@ export async function getRoster({ fetch, store, now = Date.now(), force = false 
   // accept only a (nearly) complete league; otherwise keep the old copy
   if (r.teams.length < r.teamCount - 5 || r.players.length < 100) {
     if (cached?.players?.length) return cached;
-    if (!r.players.length) throw new Error("could not load NBA rosters from ESPN");
+    if (!r.players.length) throw new Error("ESPN-ээс NBA-ийн тоглогчдын жагсаалтыг ачаалж чадсангүй");
   }
   const roster = {
     updatedAt: now,
@@ -855,22 +857,22 @@ export function sanitizePlayers(list) {
 // /follow <handle> [all]
 export async function followCommand({ fetch, store, env, arg, now = Date.now(), chatId }) {
   if (/(^|\/\/|\.)(x|twitter)\.com\b/i.test(arg)) {
-    return "X/Twitter accounts can't be read for free – only Bluesky accounts work.\nExample: /follow shamsbot.bsky.social";
+    return "X/Twitter-ийг үнэгүй унших боломжгүй – зөвхөн Bluesky хаяг ажиллана.\nЖишээ: /follow shamsbot.bsky.social";
   }
   const parts = arg.split(/\s+/).filter(Boolean);
   const mode = parts.slice(1).some((p) => p.toLowerCase() === "all") ? "all" : "players";
   const follows = await loadFollows(store, env, chatId);
   let info;
-  try { info = await resolveBsky(fetch, parts[0]); } catch (e) { return e.message + "\nExample: /follow shamsbot.bsky.social"; }
+  try { info = await resolveBsky(fetch, parts[0]); } catch (e) { return e.message + "\nЖишээ: /follow shamsbot.bsky.social"; }
   const existing = follows.find((f) => f.did === info.did || f.handle === info.handle);
-  if (!existing && follows.length >= MAX_FOLLOWS) return `You can follow up to ${MAX_FOLLOWS} accounts. /unfollow one first.`;
+  if (!existing && follows.length >= MAX_FOLLOWS) return `Хамгийн ихдээ ${MAX_FOLLOWS} хаяг дагах боломжтой. Эхлээд нэгийг /unfollow хийнэ үү.`;
   const entry = { handle: info.handle, did: info.did, name: info.name, lastPostAt: info.lastPostAt, mode };
   await store.setJSON(followsKey(env, chatId), existing ? follows.map((f) => (f === existing ? entry : f)) : [...follows, entry]);
-  let msg = `${existing ? "Updated" : "Following"} @${info.handle}${info.name ? ` (${info.name})` : ""} – ` +
-    (mode === "all" ? "you'll get every post." : "you'll get posts that mention your players.");
+  let msg = `${existing ? "Шинэчиллээ" : "Дагаж эхэллээ"}: @${info.handle}${info.name ? ` (${info.name})` : ""} – ` +
+    (mode === "all" ? "бүх постыг илгээнэ." : "таны тоглогчдыг дурдсан постыг илгээнэ.");
   const ageDays = info.lastPostAt ? (now - Date.parse(info.lastPostAt)) / 864e5 : Infinity;
   if (ageDays > 30) {
-    msg += `\n⚠️ Last post: ${info.lastPostAt ? info.lastPostAt.slice(0, 10) : "none"} – this account looks inactive.`;
+    msg += `\n⚠️ Сүүлийн пост: ${info.lastPostAt ? info.lastPostAt.slice(0, 10) : "алга"} – энэ хаяг идэвхгүй бололтой.`;
   }
   return msg;
 }
@@ -882,7 +884,7 @@ export async function saveFollowsFromWeb({ fetch, store, env, list, chatId }) {
   const out = [];
   for (const raw of list.slice(0, MAX_FOLLOWS)) {
     const h = normalizeHandle(raw?.handle);
-    if (!h) throw new Error(`"${raw?.handle}" is not a Bluesky handle`);
+    if (!h) throw new Error(`"${raw?.handle}" нь Bluesky хаяг биш байна`);
     const mode = raw?.mode === "all" ? "all" : "players";
     let entry = current.find((f) => f.handle === h || f.did === h);
     if (!entry || !entry.did) {
@@ -937,16 +939,16 @@ export async function describeSources(store, env, chatId) {
 
 export function formatSources(list) {
   const hhmm = (iso) => iso.slice(11, 16) + " UTC";
-  const lines = ["📡 News sources"];
+  const lines = ["📡 Мэдээний эх сурвалжууд"];
   for (const s of list) {
     let head;
-    if (!s.enabled) head = `⏸ ${s.label} – off`;
-    else if (!s.status) head = `⏳ ${s.label} – not checked yet`;
-    else if (s.status.ok) head = `✅ ${s.label} – ${s.status.items} items @ ${hhmm(s.status.at)}`;
-    else head = `❌ ${s.label} – ${s.status.error} @ ${hhmm(s.status.at)}`;
-    lines.push("", head, "   " + s.en);
-    if (s.detail) lines.push("   " + s.detail.en);
+    if (!s.enabled) head = `⏸ ${s.label} – унтраастай`;
+    else if (!s.status) head = `⏳ ${s.label} – хараахан шалгаагүй`;
+    else if (s.status.ok) head = `✅ ${s.label} – ${s.status.items} мэдээ · ${hhmm(s.status.at)}`;
+    else head = `❌ ${s.label} – алдаа: ${s.status.error} · ${hhmm(s.status.at)}`;
+    lines.push("", head, "   " + s.mn);
+    if (s.detail) lines.push("   " + s.detail.mn);
   }
-  lines.push("", "Checked every 2 minutes. Manage: /follow, /add, /web");
+  lines.push("", "2 минут тутам шалгана. Удирдах: /follow, /add, /web");
   return lines.join("\n");
 }

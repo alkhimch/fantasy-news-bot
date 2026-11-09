@@ -48,7 +48,7 @@ test("/approve opens access with a private web link; players are per user", asyn
   await w.poll(); // learns the site URL
   await w.msg(7, "/start");
   await w.msg(42, "/approve 7 30");
-  assert.match(w.to(42).at(-1), /^✅ Opened: Bat @bat99 until \d{4}-\d\d-\d\d$/);
+  assert.match(w.to(42).at(-1), /^✅ Эрх нээлээ: Bat @bat99 \(\d{4}-\d\d-\d\d хүртэл\)$/);
   const welcome = w.to(7).at(-1);
   assert.match(welcome, /✅ Таны эрх нээгдлээ! \(\d{4}-\d\d-\d\d хүртэл\)/);
   assert.ok(welcome.includes("https://s.netlify.app/?key=" + core.webKey(env, "7")), welcome);
@@ -58,7 +58,7 @@ test("/approve opens access with a private web link; players are per user", asyn
   assert.ok(!/\/approve|\/block|\/users|\/admin/.test(welcome), "no owner commands");
 
   await w.msg(7, "/add LeBron James");
-  assert.equal(w.to(7).at(-1), "Added: LeBron James");
+  assert.equal(w.to(7).at(-1), "Нэмлээ: LeBron James");
   await w.msg(7, "/list");
   assert.ok(w.to(7).at(-1).includes("LeBron James") && !w.to(7).at(-1).includes("Jokic"));
   await w.msg(42, "/list");
@@ -66,11 +66,11 @@ test("/approve opens access with a private web link; players are per user", asyn
   await w.msg(7, "/web");
   assert.equal(w.to(7).at(-1), "⚙️ https://s.netlify.app/?key=" + core.webKey(env, "7"));
   await w.msg(7, "/approve 7");
-  assert.ok(!w.to(7).at(-1).startsWith("✅ Opened"), "customers can't use admin commands");
+  assert.ok(!w.to(7).at(-1).startsWith("✅ Эрх нээлээ"), "customers can't use admin commands");
   assert.ok(w.to(7).at(-1).startsWith("Командууд:") && !w.to(7).at(-1).includes("Админ"), "customers get the help without admin part");
 
   await w.msg(42, "/users");
-  assert.match(w.to(42).at(-1), /✅ Bat @bat99 – 7 – until \d{4}-\d\d-\d\d – 1 players/);
+  assert.match(w.to(42).at(-1), /✅ Bat @bat99 – 7 – \d{4}-\d\d-\d\d хүртэл – 1 тоглогч/);
   await w.msg(42, "/block 7");
   assert.equal(await w.msg(7, "/list"), "blocked");
   assert.equal(w.to(7).at(-1), "⛔ Таны эрх хаагдсан байна.");
@@ -132,9 +132,9 @@ test("admin page access: setUserAccess, listUsers, dates in Ulaanbaatar time", a
   assert.match(w.to(7)[0], /✅ Таны эрх нээгдлээ! \(2027-06-30 хүртэл\)/);
   await core.setUserAccess({ fetch: w.fetch, store: w.store, env, chatId: "7", note: "renewed", log: quiet });
   assert.equal(w.to(7).length, 1, "editing a note doesn't re-send the welcome");
-  await assert.rejects(core.setUserAccess({ fetch: w.fetch, store: w.store, env, chatId: "99", status: "active" }), /unknown user/);
-  await assert.rejects(core.setUserAccess({ fetch: w.fetch, store: w.store, env, chatId: "7", expiresAt: "soon" }), /bad date/);
-  await assert.rejects(core.setUserAccess({ fetch: w.fetch, store: w.store, env, chatId: "7", status: "vip" }), /bad status/);
+  await assert.rejects(core.setUserAccess({ fetch: w.fetch, store: w.store, env, chatId: "99", status: "active" }), /Хэрэглэгч олдсонгүй/);
+  await assert.rejects(core.setUserAccess({ fetch: w.fetch, store: w.store, env, chatId: "7", expiresAt: "soon" }), /Огноо буруу/);
+  await assert.rejects(core.setUserAccess({ fetch: w.fetch, store: w.store, env, chatId: "7", status: "vip" }), /Төлөв буруу/);
   const list = await core.listUsers(w.store, env);
   assert.deepEqual(list.map((x) => [x.chatId, x.status, x.active, x.players]), [["7", "active", true, 0]]);
 });

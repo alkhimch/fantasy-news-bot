@@ -65,7 +65,7 @@ test("follows: default accounts, player filter, reposts ignored, new follow seed
   w.post("rotowirenba.bsky.social", "Some Guy: Starts Wednesday");
   w.sent.length = 0;
   await w.cmd(1, "/follow @rotowirenba all");
-  assert.match(w.sent[0], /Following @rotowirenba\.bsky\.social \(RotoWire NBA\) – you'll get every post\./);
+  assert.match(w.sent[0], /Дагаж эхэллээ: @rotowirenba\.bsky\.social \(RotoWire NBA\) – бүх постыг илгээнэ\./);
   w.sent.length = 0;
   await w.poll();
   assert.equal(w.sent.length, 0, "old posts of a newly followed account are skipped");
@@ -82,20 +82,20 @@ test("follows: default accounts, player filter, reposts ignored, new follow seed
 test("/follow, /following, /unfollow and error cases", async () => {
   const w = bskyWorld();
   await w.cmd(1, "/follow nobody.bsky.social");
-  assert.match(w.sent.at(-1), /Bluesky account not found: nobody\.bsky\.social/);
+  assert.match(w.sent.at(-1), /Bluesky хаяг олдсонгүй: nobody\.bsky\.social/);
   await w.cmd(2, "/follow https://x.com/ShamsCharania");
-  assert.match(w.sent.at(-1), /X\/Twitter accounts can't be read for free/);
+  assert.match(w.sent.at(-1), /X\/Twitter-ийг үнэгүй унших боломжгүй/);
   await w.cmd(3, "/follow old.bsky.social");
-  assert.match(w.sent.at(-1), /⚠️ Last post: none – this account looks inactive/);
+  assert.match(w.sent.at(-1), /⚠️ Сүүлийн пост: алга – энэ хаяг идэвхгүй бололтой/);
   w.post("thesteinline.bsky.social", "hi");
   await w.cmd(4, "/follow thesteinline.bsky.social all");     // update existing default entry
-  assert.match(w.sent.at(-1), /^Updated @thesteinline/);
-  assert.ok(!/inactive/.test(w.sent.at(-1)));
+  assert.match(w.sent.at(-1), /^Шинэчиллээ: @thesteinline/);
+  assert.ok(!/идэвхгүй/.test(w.sent.at(-1)));
   await w.cmd(5, "/following");
-  assert.match(w.sent.at(-1), /@thesteinline\.bsky\.social \(Marc Stein\) – every post/);
-  assert.match(w.sent.at(-1), /@old\.bsky\.social \(Old\) – your players only/);
+  assert.match(w.sent.at(-1), /@thesteinline\.bsky\.social \(Marc Stein\) – бүх пост/);
+  assert.match(w.sent.at(-1), /@old\.bsky\.social \(Old\) – зөвхөн таны тоглогчид/);
   await w.cmd(6, "/unfollow @old");
-  assert.match(w.sent.at(-1), /Unfollowed @old\.bsky\.social/);
+  assert.match(w.sent.at(-1), /Дагахаа болилоо: @old\.bsky\.social/);
   assert.deepEqual((await w.store.get("follows")).map((f) => f.handle), ["shamsbot.bsky.social", "thesteinline.bsky.social"]);
 });
 
@@ -105,8 +105,8 @@ test("saveFollowsFromWeb resolves new handles and rejects unknown ones", async (
     list: [{ handle: "shamsbot.bsky.social", mode: "all" }, { handle: "@rotowirenba" }, { handle: "rotowirenba.bsky.social" }] });
   assert.deepEqual(out.map((f) => [f.handle, f.did, f.mode]),
     [["shamsbot.bsky.social", "did:plc:shams", "all"], ["rotowirenba.bsky.social", "did:plc:roto", "players"]]);
-  await assert.rejects(core.saveFollowsFromWeb({ fetch: w.fetch, store: w.store, env, list: [{ handle: "nobody.bsky.social" }] }), /not found/);
-  await assert.rejects(core.saveFollowsFromWeb({ fetch: w.fetch, store: w.store, env, list: [{ handle: "bad handle" }] }), /not a Bluesky handle/);
+  await assert.rejects(core.saveFollowsFromWeb({ fetch: w.fetch, store: w.store, env, list: [{ handle: "nobody.bsky.social" }] }), /олдсонгүй/);
+  await assert.rejects(core.saveFollowsFromWeb({ fetch: w.fetch, store: w.store, env, list: [{ handle: "bad handle" }] }), /Bluesky хаяг биш/);
   assert.equal((await w.store.get("follows")).length, 2, "failed save leaves list unchanged");
 });
 
@@ -127,7 +127,7 @@ test("same Rotowire blurb from RSS, ESPN copy and RotoWire Bluesky in one poll -
   assert.equal(w.sent.filter((t) => t.includes("33 points")).length, 1, w.sent.join("\n---\n"));
   w.sent.length = 0;
   await core.runTestAlerts({ fetch: w.fetch, store: w.store, env, limit: 5 });
-  assert.equal(w.sent.filter((t) => t.startsWith("🧪 TEST")).length, 1, "/test dedupes too");
+  assert.equal(w.sent.filter((t) => t.startsWith("🧪 ТЕСТ")).length, 1, "/test dedupes too");
 });
 
 test("Bluesky posts go only to users who follow that account, with their own mode", async () => {
