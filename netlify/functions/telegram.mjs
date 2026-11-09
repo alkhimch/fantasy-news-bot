@@ -1,6 +1,6 @@
 // Telegram webhook: instant replies to /add /remove /list /status /test.
-import { getStore } from "@netlify/blobs";
 import { handleUpdate, webhookSecret } from "../lib/core.mjs";
+import { openStore } from "../lib/store.mjs";
 
 export default async (req) => {
   const env = process.env;
@@ -10,7 +10,7 @@ export default async (req) => {
   }
   try {
     const update = await req.json();
-    await handleUpdate({ update, fetch, env, store: getStore("fantasy-news") });
+    await handleUpdate({ update, fetch, env, store: await openStore(env) });
   } catch (e) {
     console.error("update failed:", e);
   }

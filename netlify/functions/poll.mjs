@@ -1,6 +1,6 @@
 // Runs on a schedule: checks news sources and sends Telegram alerts.
-import { getStore } from "@netlify/blobs";
 import { runPoll } from "../lib/core.mjs";
+import { openStore } from "../lib/store.mjs";
 
 export default async (req, context) => {
   const env = process.env;
@@ -10,7 +10,7 @@ export default async (req, context) => {
   }
   const result = await runPoll({
     fetch, env,
-    store: getStore("fantasy-news"),
+    store: await openStore(env),
     siteUrl: context?.site?.url || env.URL,
   });
   console.log("poll done", result);

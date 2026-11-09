@@ -36,7 +36,7 @@ After the bot is running, send `/status` in Telegram to see whether each source 
   - a scheduled function checks the news every 2 minutes
   - a Telegram webhook answers `/add`, `/remove`, `/list`, `/status` and `/test` instantly
   - a web page lets you pick players from every current NBA roster (loaded from ESPN, refreshed every 12 hours). Send `/web` to the bot to get its private link. The bot also sends the link once, the first time it runs.
-  - Netlify Blobs stores the player list and which news was already sent
+  - storage: users, player lists and Bluesky follows in Supabase when it's set up (see [Storage](#storage-supabase)), otherwise in Netlify Blobs. Which news was already sent always stays in Netlify Blobs.
   - sources: ESPN's feed for each tracked player (about 10 latest Rotowire blurbs per player; reliable), Rotowire RSS (only the newest 5 items league-wide), and ESPN NBA headlines. When the same blurb arrives from two sources, it's sent once.
   - ESPN returns 403 to any User-Agent that contains "bot", so don't add it.
   - `/sources` in Telegram, or the "Эх сурвалжууд" section of the web page, shows every source, whether it is on or off, its last check time and item count, and any error.
@@ -96,6 +96,27 @@ Environment variables:
 | `PAYMENT_INFO` | `Хаан банк 5000123456 (Бат)` | Shown to customers who haven't paid. Use `\n` for a new line. |
 
 The news sources are fetched once for everyone, and each user is checked against their own list. ESPN player feeds are fetched for up to 200 different players across all users.
+
+## Storage (Supabase)
+
+Customer data lives in a free Supabase (Postgres) project:
+
+| Table | Contents |
+|---|---|
+| `users` | Customers: Telegram chat id, name, @username, status, request/activation/expiry dates, your note |
+| `players` | One row per user (you included): the player list as JSON |
+| `follows` | One row per user: followed Bluesky accounts as JSON |
+| `users_overview` (view) | Each customer with their player and follow counts |
+
+The bot's own state (which news was already seen and sent, source health, the NBA roster cache) stays in Netlify Blobs. It is read and rewritten every 2 minutes, which would use up Supabase's free egress.
+
+Setup:
+1. Create a project at [supabase.com](https://supabase.com) (free plan).
+2. Open **SQL Editor**, paste [supabase/schema.sql](supabase/schema.sql), and run it.
+3. In **Project Settings → API Keys**, copy the Project URL and a **secret** key (`sb_secret_…`, or the legacy `service_role` key). Never use the publishable/anon key. The tables have row-level security with no policies, so only the secret key can read them.
+4. In Netlify, add `SUPABASE_URL` and `SUPABASE_SECRET_KEY` (mark it secret), then trigger a deploy.
+
+On its first run after that, the bot copies users, player lists and follows from Netlify Blobs to Supabase once. It never overwrites rows Supabase already has. The old copies stay in Blobs but are no longer read. Without these two variables, everything stays in Netlify Blobs as before.
 
 ## Getting tweets
 
