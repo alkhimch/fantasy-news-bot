@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import * as core from "../netlify/lib/core.mjs";
-import { copyToSupabase, supabaseStore } from "../netlify/lib/supabase.mjs";
+import { apiBase, copyToSupabase, supabaseStore } from "../netlify/lib/supabase.mjs";
 
 const memStore = () => { const m = new Map(); return { m,
   get: async (k) => (m.has(k) ? JSON.parse(m.get(k)) : null), setJSON: async (k, v) => m.set(k, JSON.stringify(v)) }; };
@@ -22,7 +22,7 @@ function fakeSupabase() {
     if ((opts.method || "GET") === "GET") {
       const id = u.searchParams.get("chat_id")?.replace(/^eq\./, "");
       const rows = [...db[table].values()].filter((r) => id == null || String(r.chat_id) === id);
-      return { ok: true, status: 200, json: async () => JSON.parse(JSON.stringify(rows)) };
+      return { ok: true, status: 200, text: async () => JSON.stringify(rows) };
     }
     assert.equal(u.searchParams.get("on_conflict"), "chat_id");
     assert.match(opts.headers.Prefer, /resolution=merge-duplicates/);
@@ -118,4 +118,13 @@ test("copyToSupabase: copies once, never overwrites newer Supabase data", async 
 test("missing tables give a clear error", async () => {
   const sb = fakeSupabase(); delete sb.db.users;
   await assert.rejects(open(sb, memStore()).get("users"), /Supabase GET users: HTTP 404 relation "public.users" does not exist/);
+});
+
+test("SUPABASE_URL: dashboard link and /rest/v1 are accepted; a web page gives a clear error", async () => {
+  assert.equal(apiBase("https://abc123.supabase.co"), "https://abc123.supabase.co/rest/v1/");
+  assert.equal(apiBase(" https://abc123.supabase.co/rest/v1/ "), "https://abc123.supabase.co/rest/v1/");
+  assert.equal(apiBase("https://supabase.com/dashboard/project/abc123/editor/1"), "https://abc123.supabase.co/rest/v1/");
+  const html = async () => ({ ok: true, status: 200, text: async () => "<!DOCTYPE html><html></html>" });
+  const store = supabaseStore({ url: "https://example.com", key: "k", fetch: html, ownerId: "42", fallback: memStore() });
+  await assert.rejects(store.get("users"), /web page, not data: SUPABASE_URL must be https:\/\/<project-id>\.supabase\.co \(got https:\/\/example\.com\/rest\/v1\/\)/);
 });

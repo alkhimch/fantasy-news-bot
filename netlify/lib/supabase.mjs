@@ -25,8 +25,15 @@ function toRow(u, now) {
 
 export const supabaseKey = (env) => env.SUPABASE_SECRET_KEY || env.SUPABASE_SERVICE_ROLE_KEY || "";
 
+// "https://abc.supabase.co", also forgiving ".../rest/v1" and the dashboard link ".../dashboard/project/abc"
+export function apiBase(url) {
+  const s = String(url || "").trim().replace(/\/+$/, "").replace(/\/rest\/v1$/, "");
+  const dash = s.match(/supabase\.com\/dashboard\/project\/([a-z0-9]+)/i);
+  return (dash ? `https://${dash[1]}.supabase.co` : s) + "/rest/v1/";
+}
+
 export function supabaseStore({ url, key, fetch, ownerId, fallback }) {
-  const base = String(url).replace(/\/+$/, "") + "/rest/v1/";
+  const base = apiBase(url);
   async function rest(path, { method = "GET", body, prefer } = {}) {
     const res = await fetch(base + path, {
       method,
@@ -35,7 +42,11 @@ export function supabaseStore({ url, key, fetch, ownerId, fallback }) {
       signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
     });
     if (!res.ok) throw new Error(`Supabase ${method} ${path.split("?")[0]}: HTTP ${res.status} ${(await res.text().catch(() => "")).slice(0, 200)}`);
-    return method === "GET" ? res.json() : null;
+    if (method !== "GET") return null;
+    const text = await res.text();
+    try { return JSON.parse(text); } catch {
+      throw new Error(`Supabase answered with a web page, not data: SUPABASE_URL must be https://<project-id>.supabase.co (got ${base})`);
+    }
   }
   const upsert = (table, rows) =>
     rest(`${table}?on_conflict=chat_id`, { method: "POST", body: rows, prefer: "resolution=merge-duplicates,return=minimal" });
