@@ -52,6 +52,10 @@ test("/approve opens access with a private web link; players are per user", asyn
   const welcome = w.to(7).at(-1);
   assert.match(welcome, /✅ Таны эрх нээгдлээ! \(\d{4}-\d\d-\d\d хүртэл\)/);
   assert.ok(welcome.includes("https://s.netlify.app/?key=" + core.webKey(env, "7")), welcome);
+  for (const c of ["/add", "/remove", "/list", "/web", "/follow", "/unfollow", "/following", "/sources", "/status", "/test", "/help"]) {
+    assert.ok(welcome.includes("\n" + c + " "), "welcome lists " + c);
+  }
+  assert.ok(!/\/approve|\/block|\/users|\/admin/.test(welcome), "no owner commands");
 
   await w.msg(7, "/add LeBron James");
   assert.equal(w.to(7).at(-1), "Added: LeBron James");
@@ -63,6 +67,7 @@ test("/approve opens access with a private web link; players are per user", asyn
   assert.equal(w.to(7).at(-1), "⚙️ https://s.netlify.app/?key=" + core.webKey(env, "7"));
   await w.msg(7, "/approve 7");
   assert.ok(!w.to(7).at(-1).startsWith("✅ Opened"), "customers can't use admin commands");
+  assert.ok(w.to(7).at(-1).startsWith("Командууд:") && !w.to(7).at(-1).includes("Админ"), "customers get the help without admin part");
 
   await w.msg(42, "/users");
   assert.match(w.to(42).at(-1), /✅ Bat @bat99 – 7 – until \d{4}-\d\d-\d\d – 1 players/);

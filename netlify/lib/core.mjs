@@ -382,6 +382,24 @@ function paymentText(env, chatId) {
   ].join("\n");
 }
 
+// sent with the welcome when access opens
+const CUSTOMER_COMMANDS = [
+  "Командууд:",
+  "/add Нэр – тоглогч нэмэх",
+  "   жишээ: /add Nikola Jokic, Stephen Curry",
+  "   хочтой: /add Shai Gilgeous-Alexander (SGA)",
+  "/remove Нэр – тоглогч хасах",
+  "/list – миний тоглогчид",
+  "/web – вебээр тоглогч сонгох линк",
+  "/follow хаяг – Bluesky хаяг дагах (ард нь all гэвэл бүх пост)",
+  "/unfollow хаяг – дагахаа болих",
+  "/following – дагаж буй хаягууд",
+  "/sources – мэдээний эх сурвалжууд",
+  "/status – эх сурвалжуудын төлөв",
+  "/test – шалгаж, жишээ мэдээ илгээх",
+  "/help – командуудын жагсаалт",
+].join("\n");
+
 // "2027-06-30" -> end of that day in Ulaanbaatar; "" / null -> no expiry
 export function parseExpiry(v) {
   if (v == null || v === "") return null;
@@ -411,7 +429,7 @@ export async function setUserAccess({ fetch, store, env, chatId, status, expires
     const site = ((await loadState(store)).webhookUrl || "").replace(/\/telegram$/, "");
     const lines = [`✅ Таны эрх нээгдлээ!${user.expiresAt ? ` (${fmtDate(user.expiresAt)} хүртэл)` : ""}`, ""];
     if (site) lines.push("Тоглогчоо сонгох:", webLink(site, env, id), "(Энэ линкийг хэнд ч бүү өг. Дахин авах: /web)", "");
-    lines.push("Эсвэл энд бичээд нэмнэ: /add Nikola Jokic", "/help – бүх командууд");
+    lines.push(CUSTOMER_COMMANDS);
     await send(fetch, env, escapeHtml(lines.join("\n")), id).catch((e) => log.warn("welcome to", id, "failed:", e.message));
   }
   return user;
@@ -603,15 +621,10 @@ export async function runTestAlerts({ fetch, store, env, limit = 3, chatId = own
 }
 
 // -------------------------------------------------------------- commands
-const HELP =
-  "/list – tracked players\n/add Name[, Name2] – track (aliases: Name (Nick))\n" +
-  "/remove Name – untrack\n/web – link to pick players on the website\n/sources – all news sources and their health\n" +
-  "/follow handle [all] – follow a Bluesky account (posts about your players; 'all' = every post)\n" +
-  "/unfollow handle – stop following\n/following – followed accounts\n" +
-  "/status – source health\n/test – check sources + send sample alerts";
+const HELP = CUSTOMER_COMMANDS;
 const OWNER_HELP =
-  "\n\nAdmin:\n/admin – link to the users page\n/users – customers and their access\n" +
-  "/approve id [days] – open access (no days = no expiry)\n/block id – close access";
+  "\n\nАдмин:\n/admin – хэрэглэгчдийн хуудасны линк\n/users – хэрэглэгчид, эрхийн байдал\n" +
+  "/approve ID [хоног] – эрх нээх (хоноггүй бол хугацаагүй)\n/block ID – эрх хаах";
 
 // A customer who isn't active: register the request, tell the owner once, answer with how to pay.
 async function gate({ fetch, store, env, msg, now, log }) {

@@ -59,5 +59,6 @@ test("/sources before first poll shows 'not checked yet'; /help lists /sources",
   await core.handleUpdate({ update: { update_id: 1, message: { chat: { id: 42 }, text: "/sources" } }, fetch: f, store, env });
   assert.match(sent[0], /⏳ Rotowire RSS – not checked yet/);
   await core.handleUpdate({ update: { update_id: 2, message: { chat: { id: 42 }, text: "/help" } }, fetch: f, store, env });
-  assert.match(sent[1], /\/sources – all news sources and their health/);
+  assert.match(sent[1], /\/sources – мэдээний эх сурвалжууд/);
+  assert.match(sent[1], /Админ:\n\/admin – /, "owner also sees admin commands");
 });
