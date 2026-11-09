@@ -129,3 +129,26 @@ test("same Rotowire blurb from RSS, ESPN copy and RotoWire Bluesky in one poll -
   await core.runTestAlerts({ fetch: w.fetch, store: w.store, env, limit: 5 });
   assert.equal(w.sent.filter((t) => t.startsWith("🧪 TEST")).length, 1, "/test dedupes too");
 });
+
+test("Bluesky posts go only to users who follow that account, with their own mode", async () => {
+  const w = bskyWorld();
+  const to = [];
+  const base = w.fetch;
+  w.fetch = async (url, opts) => {
+    if (url.endsWith("sendMessage")) to.push([String(JSON.parse(opts.body).chat_id), JSON.parse(opts.body).text]);
+    return base(url, opts);
+  };
+  await w.store.setJSON("users", { 7: { chatId: "7", status: "active" }, 8: { chatId: "8", status: "active" } });
+  await w.store.setJSON("players/7", [{ name: "Yves Missi", aliases: [] }]);
+  await w.store.setJSON("follows/7", []);                                                   // follows nobody
+  await w.store.setJSON("players/8", []);
+  await w.store.setJSON("follows/8", [{ handle: "thesteinline.bsky.social", mode: "all" }]); // every Stein post
+  await w.poll();
+  w.post("shamsbot.bsky.social", "Yves Missi (knee) will miss 2-3 weeks.");
+  w.post("thesteinline.bsky.social", "Warriors talk on the pod today.");
+  await w.poll();
+  const by = (id) => to.filter(([c]) => c === id).map(([, t]) => t);
+  assert.equal(by("42").length, 1); assert.match(by("42")[0], /Yves Missi/);   // owner: default follows, owner's player
+  assert.deepEqual(by("7"), [], "user 7 doesn't follow shamsbot");
+  assert.equal(by("8").length, 1); assert.match(by("8")[0], /^📣 <i>Bluesky @thesteinline<\/i>/);
+});

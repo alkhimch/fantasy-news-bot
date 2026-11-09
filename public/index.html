@@ -76,6 +76,11 @@
     <p>Telegram дээр bot-доо <code>/web</code> гэж бичээд ирсэн линкээр нээнэ үү.</p>
   </section>
 
+  <section id="inactive" class="card lock" hidden>
+    <p><b>Таны эрх идэвхгүй байна.</b></p>
+    <p>Эрхээ сунгахын тулд Telegram дээр bot-доо бичнэ үү.</p>
+  </section>
+
   <div id="app" hidden>
     <section class="card">
       <h2 id="mineTitle">Сонгосон тоглогчид</h2>
@@ -146,14 +151,15 @@
   const api = async (path, opts = {}) => {
     const res = await fetch(path, { ...opts, headers: { "x-key": k || "", "Content-Type": "application/json", ...(opts.headers || {}) } });
     if (res.status === 401) { lock(); throw new Error("unauthorized"); }
+    if (res.status === 403) { lock(true); throw new Error("unauthorized"); }
     const data = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(data.error || res.status);
     return data;
   };
 
-  function lock() {
-    try { localStorage.removeItem("fnbKey"); } catch (e) {}
-    $("app").hidden = true; $("locked").hidden = false;
+  function lock(inactive) {
+    if (!inactive) try { localStorage.removeItem("fnbKey"); } catch (e) {}
+    $("app").hidden = true; $("locked").hidden = !!inactive; $("inactive").hidden = !inactive;
   }
 
   function flash(text, err) {

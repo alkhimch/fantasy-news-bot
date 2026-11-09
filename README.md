@@ -43,6 +43,8 @@ After the bot is running, send `/status` in Telegram to see whether each source 
   - Bluesky accounts: `/follow handle [all]`, `/unfollow handle` and `/following`, or the "Bluesky хаягууд" section of the web page. You get posts that mention your players, or every post in `all` mode. Defaults: `shamsbot.bsky.social` (an unofficial copy of Shams Charania's tweets) and `thesteinline.bsky.social` (Marc Stein). To replace them on first run, set the env var `FOLLOWS`. When you follow an account, its existing posts aren't sent.
   - X/Twitter can't be read for free: Nitter and XCancel are shut down, and X's embed endpoint only returns old popular tweets. So Bluesky is used instead.
 
+  - Several users: see [Selling access](#selling-access-netlify) below.
+
   Set the environment variables `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID` and `PLAYERS` in Netlify. For step-by-step setup, see [deploy/claude-in-chrome-prompt.md](deploy/claude-in-chrome-prompt.md). Run the tests with `npm test`.
 - **Manual fallback: GitHub Actions.** `.github/workflows/news.yml` runs `bot.py --once` every 5 minutes. GitHub often starts these runs late, so alerts arrive 5–15 minutes after the news. Settings come from GitHub Secrets `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID`, and the variable `PLAYERS`. The bot's memory of sent news is saved on the `state` branch. A public repo gets unlimited free minutes. A private repo should use `*/30` to stay within 2,000 minutes per month.
 - **Real time (2-minute checks): any always-on Linux machine** (a VPS, Oracle Cloud Always Free, or a home PC/Raspberry Pi):
@@ -72,6 +74,28 @@ Send these to the bot. It only answers your own `chat_id`.
 - `/status`: shows whether each source is working
 
 You manage the player list from Telegram after the first run. It is stored in `data/players.json`. The `players` field in `config.json` only seeds the list the first time.
+
+## Selling access (Netlify)
+
+The Netlify version serves several people from one bot. `TELEGRAM_CHAT_ID` is the owner: always active, and the only one who can open access for others.
+
+1. A customer opens the bot and sends `/start` (or anything). They get the price, your payment details and their ID to put in the transfer description. You get a "🆕 Шинэ хүсэлт" message with their name and ID.
+2. When the money arrives, open their access:
+   - on the admin page: send `/admin` to the bot to get its private link. Pick an end date (end of season, 30 or 90 days, no expiry, or any date), then "Эрх нээх". You can also add a note such as when and how they paid.
+   - or in Telegram: `/approve <id>` (no expiry) or `/approve <id> 30` (30 days).
+3. The customer gets "✅ Таны эрх нээгдлээ" and their own private web link. From then on they use every command and the web page with their own players and Bluesky follows.
+4. When the end date passes, the customer and you are told once and their alerts stop. If they write to the bot again, it shows up as a new request. Renew on the admin page ("Сунгах").
+
+Other owner commands: `/users` lists customers, `/block <id>` closes access. Customers can only use the bot in a private chat.
+
+Environment variables:
+
+| Variable | Example | Notes |
+|---|---|---|
+| `PRICE` | `50,000₮` | Default `50,000₮` |
+| `PAYMENT_INFO` | `Хаан банк 5000123456 (Бат)` | Shown to customers who haven't paid. Use `\n` for a new line. |
+
+The news sources are fetched once for everyone, and each user is checked against their own list. ESPN player feeds are fetched for up to 200 different players across all users.
 
 ## Getting tweets
 

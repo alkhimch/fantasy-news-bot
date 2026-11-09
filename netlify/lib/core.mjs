@@ -1,12 +1,15 @@
 // Fantasy news -> Telegram, Netlify edition. Pure logic; I/O is injected so it can be tested.
 // deps: { fetch, store (Netlify Blobs-like: get(key,{type:"json"}), setJSON(key,val)), env, now }
-import { createHash } from "node:crypto";
+// Multi-user: the owner (TELEGRAM_CHAT_ID) is always active; customers ask via /start and the owner
+// opens their access on the admin page (or /approve). Each user has their own players and follows.
+import { createHash, createHmac, timingSafeEqual } from "node:crypto";
 
 // NOTE: ESPN answers 403 to any User-Agent containing "bot".
 const UA = "Mozilla/5.0 (X11; Linux x86_64) fantasy-news/1.0";
 const MAX_SEEN = 5000;
 const MAX_AGE_MS = 24 * 3600 * 1000;
-const MAX_ALERTS_PER_RUN = 20;
+const MAX_ALERTS_PER_RUN = 20; // per user
+const MAX_SENT_CONTENT = 500; // per user
 const FETCH_TIMEOUT_MS = 8000;
 
 // ------------------------------------------------------------------ text utils
@@ -132,7 +135,7 @@ function espnItems(list, source) {
 
 // Per-player ESPN fantasy feed: ~10 latest Rotowire blurbs + stories for one player.
 // Rotowire's own RSS only holds the newest 5 items league-wide, so this is the reliable source.
-const MAX_PLAYER_FEEDS = 60;
+const MAX_PLAYER_FEEDS = 200; // union of all users' players
 async function espnPlayerFeeds(fetch, players) {
   const tracked = players.filter((p) => p.espnId).slice(0, MAX_PLAYER_FEEDS);
   if (!tracked.length) return [];
@@ -186,12 +189,13 @@ export async function resolveBsky(fetch, input) {
   return { handle: p.handle, did: p.did, name: p.displayName || "", lastPostAt };
 }
 
-export async function loadFollows(store, env) {
-  let follows = await store.get("follows", { type: "json" });
+export async function loadFollows(store, env, chatId) {
+  const key = followsKey(env, chatId);
+  let follows = await store.get(key, { type: "json" });
   if (!follows) {
     const seed = env.FOLLOWS != null ? env.FOLLOWS.split(",") : DEFAULT_FOLLOWS;
     follows = seed.map(normalizeHandle).filter(Boolean).map((handle) => ({ handle, mode: "players" }));
-    await store.setJSON("follows", follows);
+    await store.setJSON(key, follows);
   }
   return follows;
 }
@@ -216,7 +220,7 @@ async function blueskyFeeds(fetch, follows) {
       published: parseDate(post.record?.createdAt || post.indexedAt),
       names: [], ids: [],
       seedKey: "bsky:" + fo.handle,
-      followAll: fo.mode === "all",
+      bsky: { handle: fo.handle, did: fo.did }, // only users who follow this account get it
     };
   }));
   items.seedKeys = ok.map(({ fo }) => "bsky:" + fo.handle);
@@ -260,13 +264,31 @@ export async function tg(fetch, env, method, params) {
   if (!data.ok) throw new Error(`Telegram ${method}: ${data.description || res.status}`);
   return data.result;
 }
-export const send = (fetch, env, text) =>
+export const send = (fetch, env, text, chatId = env.TELEGRAM_CHAT_ID) =>
   tg(fetch, env, "sendMessage", {
-    chat_id: env.TELEGRAM_CHAT_ID, text: text.slice(0, 4096), parse_mode: "HTML", disable_web_page_preview: true,
+    chat_id: chatId, text: text.slice(0, 4096), parse_mode: "HTML", disable_web_page_preview: true,
   });
 
-export const webKey = (env) => sha1("fnb-web:" + env.TELEGRAM_BOT_TOKEN).slice(0, 24);
-export const webLink = (siteUrl, env) => `${siteUrl}/?key=${webKey(env)}`;
+// The owner keeps the original key, so links already saved keep working. Customers: "<chatId>.<hmac>".
+const sign = (env, s) => createHmac("sha256", String(env.TELEGRAM_BOT_TOKEN)).update(s).digest("hex").slice(0, 24);
+export const webKey = (env, chatId) => (chatId == null || isOwner(env, chatId)
+  ? sha1("fnb-web:" + env.TELEGRAM_BOT_TOKEN).slice(0, 24)
+  : `${chatId}.${sign(env, "web:" + chatId)}`);
+export const webLink = (siteUrl, env, chatId) => `${siteUrl}/?key=${webKey(env, chatId)}`;
+
+const sameText = (a, b) => {
+  const x = Buffer.from(String(a ?? "")), y = Buffer.from(String(b ?? ""));
+  return x.length === y.length && timingSafeEqual(x, y);
+};
+// x-key from the web page -> chat id of its user, or null
+export function userFromKey(env, key) {
+  if (sameText(key, webKey(env))) return ownerId(env);
+  const m = String(key ?? "").match(/^(\d+)\.[0-9a-f]{24}$/);
+  return m && sameText(key, webKey(env, m[1])) ? m[1] : null;
+}
+export const adminKey = (env) => sha1("fnb-admin:" + env.TELEGRAM_BOT_TOKEN).slice(0, 24);
+export const isAdminKey = (env, key) => sameText(key, adminKey(env));
+export const adminLink = (siteUrl, env) => `${siteUrl}/admin.html?key=${adminKey(env)}`;
 
 export const webhookSecret = (env) => sha1("fnb-webhook:" + env.TELEGRAM_BOT_TOKEN).slice(0, 32);
 
@@ -298,15 +320,102 @@ function hitsFor(players, item) {
   return [...new Set(hits)];
 }
 
+// ----------------------------------------------------------------------- users
+// blob "users" = { [chatId]: { chatId, name, username, status, requestedAt, activatedAt, expiresAt, note } }
+// status: "pending" (asked, not paid yet) | "active" | "expired" | "blocked". The owner is not in it.
+export const ownerId = (env) => String(env.TELEGRAM_CHAT_ID);
+export const isOwner = (env, id) => String(id) === ownerId(env);
+// the owner keeps the original single-user blob keys
+const playersKey = (env, id) => (id == null || isOwner(env, id) ? "players" : `players/${id}`);
+const followsKey = (env, id) => (id == null || isOwner(env, id) ? "follows" : `follows/${id}`);
+
+export const loadUsers = async (store) => (await store.get("users", { type: "json" })) || {};
+// read-modify-write on a fresh copy, so a poll doesn't overwrite an approval made meanwhile
+export async function updateUsers(store, fn) {
+  const users = await loadUsers(store);
+  const result = fn(users);
+  await store.setJSON("users", users);
+  return result;
+}
+export const isActive = (u, now = Date.now()) =>
+  u?.status === "active" && (!u.expiresAt || Date.parse(u.expiresAt) > now);
+
+const PRICE = (env) => env.PRICE || "50,000₮";
+const fmtDate = (iso) => (iso ? new Date(Date.parse(iso) + 8 * 3600e3).toISOString().slice(0, 10) : ""); // Ulaanbaatar
+const userLabel = (u) => [u.name, u.username && "@" + u.username].filter(Boolean).join(" ") || u.chatId;
+
+function paymentText(env, chatId) {
+  return [
+    "🏀 Fantasy News Bot",
+    "",
+    "Таны NBA fantasy тоглогчдын шинэ мэдээ (бэртэл, тоглох эсэх, арилжаа гэх мэт) гармагц Telegram-аар шууд мэдэгдэнэ.",
+    "",
+    `Үнэ: ${PRICE(env)}`,
+    env.PAYMENT_INFO ? env.PAYMENT_INFO.replace(/\\n/g, "\n") : "Төлбөрийн мэдээллийг админаас аваарай.",
+    `Гүйлгээний утга: ${chatId}`,
+    "",
+    "Төлбөр баталгаажмагц эрх нээгдэж, энд мэдэгдэл ирнэ.",
+  ].join("\n");
+}
+
+// "2027-06-30" -> end of that day in Ulaanbaatar; "" / null -> no expiry
+export function parseExpiry(v) {
+  if (v == null || v === "") return null;
+  const s = String(v).trim();
+  const d = /^\d{4}-\d{2}-\d{2}$/.test(s) ? new Date(s + "T23:59:59+08:00") : new Date(s);
+  if (isNaN(d)) throw new Error(`bad date: ${s}`);
+  return d.toISOString();
+}
+
+// Owner action from the admin page or /approve /block: change a user's access; tells the user when opened.
+export async function setUserAccess({ fetch, store, env, chatId, status, expiresAt, note, now = Date.now(), log = console }) {
+  const id = String(chatId);
+  if (status != null && !["pending", "active", "expired", "blocked"].includes(status)) throw new Error(`bad status: ${status}`);
+  const exp = expiresAt === undefined ? undefined : parseExpiry(expiresAt);
+  const { before, user } = await updateUsers(store, (users) => {
+    const u = users[id];
+    if (!u) return {};
+    const before = { ...u };
+    if (status != null) u.status = status;
+    if (exp !== undefined) u.expiresAt = exp;
+    if (note !== undefined) u.note = String(note).slice(0, 200);
+    if (u.status === "active" && !isActive(before, now)) u.activatedAt = new Date(now).toISOString();
+    return { before, user: { ...u } };
+  });
+  if (!user) throw new Error(`unknown user: ${id}`);
+  if (isActive(user, now) && !isActive(before, now)) {
+    const site = ((await loadState(store)).webhookUrl || "").replace(/\/telegram$/, "");
+    const lines = [`✅ Таны эрх нээгдлээ!${user.expiresAt ? ` (${fmtDate(user.expiresAt)} хүртэл)` : ""}`, ""];
+    if (site) lines.push("Тоглогчоо сонгох:", webLink(site, env, id), "(Энэ линкийг хэнд ч бүү өг. Дахин авах: /web)", "");
+    lines.push("Эсвэл энд бичээд нэмнэ: /add Nikola Jokic", "/help – бүх командууд");
+    await send(fetch, env, escapeHtml(lines.join("\n")), id).catch((e) => log.warn("welcome to", id, "failed:", e.message));
+  }
+  return user;
+}
+
+// Admin page list: every user + how many players they track
+export async function listUsers(store, env, now = Date.now()) {
+  const users = Object.values(await loadUsers(store));
+  const order = { pending: 0, active: 1, expired: 2, blocked: 3 };
+  const out = await Promise.all(users.map(async (u) => ({
+    ...u,
+    active: isActive(u, now),
+    players: ((await store.get(playersKey(env, u.chatId), { type: "json" })) || []).length,
+  })));
+  return out.sort((a, b) => (order[a.status] ?? 9) - (order[b.status] ?? 9) || String(b.requestedAt).localeCompare(String(a.requestedAt)));
+}
+
 // ----------------------------------------------------------------------- state
-export async function loadPlayers(store, env) {
-  let players = await store.get("players", { type: "json" });
+export async function loadPlayers(store, env, chatId) {
+  const key = playersKey(env, chatId);
+  let players = await store.get(key, { type: "json" });
   if (!players) {
-    players = parsePlayerList(env.PLAYERS);
-    await store.setJSON("players", players);
+    players = key === "players" ? parsePlayerList(env.PLAYERS) : [];
+    await store.setJSON(key, players);
   }
   return players;
 }
+export const savePlayers = (store, env, chatId, players) => store.setJSON(playersKey(env, chatId), players);
 const loadState = async (store) =>
   (await store.get("state", { type: "json" })) || { seen: [], status: {}, initialized: false };
 
@@ -332,18 +441,23 @@ export async function runPoll({ fetch, store, env, now = Date.now(), siteUrl, lo
     } catch (e) { log.warn("web link send failed:", e.message); }
   }
 
-  const players = await loadPlayers(store, env);
-  const follows = await loadFollows(store, env);
-  await enrichPlayers({ fetch, store, players, now, log });
+  await expireUsers({ fetch, store, env, now, log });
+  const audience = await loadAudience({ fetch, store, env, now, log });
+  const players = unionBy(audience.flatMap((a) => a.players), (p) => p.espnId || stripSuffix(p.name));
+  const follows = unionBy(audience.flatMap((a) => a.follows), (f) => f.did || f.handle);
   state.seeded = state.seeded || [];
   const seededAtStart = new Set(state.seeded);
   const seen = new Set(state.seen);
-  state.sentContent = state.sentContent || [];
-  const sentContent = new Set(state.sentContent);
+  state.sentBy = state.sentBy || {};
+  if (state.sentContent) { state.sentBy[ownerId(env)] = state.sentContent; delete state.sentContent; } // single-user state
+  for (const a of audience) {
+    a.sentList = state.sentBy[a.id] ||= [];
+    a.sent = new Set(a.sentList);
+    a.outbox = [];
+  }
   const stamp = new Date(now).toISOString().slice(11, 16) + " UTC";
-  const outbox = [];
 
-  if (players.length || follows.some((f) => f.mode === "all")) {
+  if (audience.some((a) => a.players.length || a.follows.some((f) => f.mode === "all"))) {
     for (const r of await fetchAll(fetch, env, players, follows)) {
       if (r.status === "rejected") {
         state.status[r.name] = `ERROR ${String(r.reason?.message || r.reason).slice(0, 100)} @ ${stamp}`;
@@ -360,36 +474,82 @@ export async function runPoll({ fetch, store, env, now = Date.now(), siteUrl, lo
         if (!state.initialized) continue; // first run: just learn existing news
         if (item.seedKey && !seededAtStart.has(item.seedKey)) continue; // newly followed account: skip its old posts
         if (item.published && now - item.published.getTime() > MAX_AGE_MS) continue;
-        const hits = hitsFor(players, item);
-        if (!hits.length && !item.followAll) continue;
-        const keys = contentKeys(item);
-        const dup = keys.some((k) => sentContent.has(k)); // same blurb already sent via another source
-        for (const k of keys) if (!sentContent.has(k)) { sentContent.add(k); state.sentContent.push(k); }
-        if (!dup) outbox.push(formatItem(item, hits));
+        for (const a of audience) {
+          const hits = hitsFor(a.players, item);
+          let followAll = false;
+          if (item.bsky) {
+            const f = a.follows.find((x) => x.handle === item.bsky.handle || (x.did && x.did === item.bsky.did));
+            if (!f) continue;
+            followAll = f.mode === "all";
+          }
+          if (!hits.length && !followAll) continue;
+          const keys = contentKeys(item);
+          const dup = keys.some((k) => a.sent.has(k)); // same blurb already sent via another source
+          for (const k of keys) if (!a.sent.has(k)) { a.sent.add(k); a.sentList.push(k); }
+          if (!dup) a.outbox.push(formatItem(item, hits));
+        }
       }
       for (const k of r.value.seedKeys || []) if (!state.seeded.includes(k)) state.seeded.push(k);
     }
     state.initialized = true;
   }
 
-  let sent = 0;
-  for (const msg of outbox.slice(0, MAX_ALERTS_PER_RUN)) {
-    try { await send(fetch, env, msg); sent++; } catch (e) { log.error("send failed:", e.message); }
-  }
-  if (outbox.length > MAX_ALERTS_PER_RUN) {
-    await send(fetch, env, `…and ${outbox.length - MAX_ALERTS_PER_RUN} more updates.`).catch(() => {});
-  }
+  // users in parallel, each user's messages in order
+  const counts = await Promise.all(audience.map(async (a) => {
+    let n = 0;
+    for (const msg of a.outbox.slice(0, MAX_ALERTS_PER_RUN)) {
+      try { await send(fetch, env, msg, a.id); n++; } catch (e) { log.error("send to", a.id, "failed:", e.message); }
+    }
+    if (a.outbox.length > MAX_ALERTS_PER_RUN) {
+      await send(fetch, env, `…and ${a.outbox.length - MAX_ALERTS_PER_RUN} more updates.`, a.id).catch(() => {});
+    }
+    if (a.sentList.length > MAX_SENT_CONTENT) state.sentBy[a.id] = a.sentList.slice(-MAX_SENT_CONTENT);
+    return n;
+  }));
   if (state.seen.length > MAX_SEEN) state.seen = state.seen.slice(-MAX_SEEN);
-  if (state.sentContent.length > 1000) state.sentContent = state.sentContent.slice(-1000);
   state.lastRun = new Date(now).toISOString();
   await store.setJSON("state", state);
-  return { sent, players: players.length };
+  return { sent: counts.reduce((x, y) => x + y, 0), players: players.length, users: audience.length };
+}
+
+function unionBy(list, keyOf) {
+  const m = new Map();
+  for (const x of list) if (!m.has(keyOf(x))) m.set(keyOf(x), x);
+  return [...m.values()];
+}
+
+// owner + every customer with active access, each with their own players/follows
+async function loadAudience({ fetch, store, env, now, log }) {
+  const users = await loadUsers(store);
+  const ids = [ownerId(env), ...Object.values(users).filter((u) => isActive(u, now) && !isOwner(env, u.chatId)).map((u) => String(u.chatId))];
+  return Promise.all(ids.map(async (id) => {
+    const players = await loadPlayers(store, env, id);
+    await enrichPlayers({ fetch, store, players, now, log, key: playersKey(env, id) });
+    return { id, players, follows: await loadFollows(store, env, id) };
+  }));
+}
+
+// active users whose paid period ended -> "expired"; tell them and the owner once
+async function expireUsers({ fetch, store, env, now, log }) {
+  const due = Object.values(await loadUsers(store)).filter((u) => u.status === "active" && u.expiresAt && !isActive(u, now));
+  if (!due.length) return;
+  const done = await updateUsers(store, (users) => due.filter((u) => {
+    const cur = users[u.chatId];
+    if (!cur || cur.status !== "active" || isActive(cur, now)) return false; // renewed meanwhile
+    cur.status = "expired";
+    return true;
+  }));
+  for (const u of done) {
+    await send(fetch, env, escapeHtml("⌛ Таны эрхийн хугацаа дууслаа.\n\n" + paymentText(env, u.chatId)), u.chatId)
+      .catch((e) => log.warn("expiry notice to", u.chatId, "failed:", e.message));
+    await send(fetch, env, escapeHtml(`⌛ Эрх дууслаа: ${userLabel(u)} (${u.chatId})`)).catch(() => {});
+  }
 }
 
 // ------------------------------------------------------------- test (/test)
-export async function runTestAlerts({ fetch, store, env, limit = 3 }) {
-  const players = await loadPlayers(store, env);
-  const follows = await loadFollows(store, env);
+export async function runTestAlerts({ fetch, store, env, limit = 3, chatId = ownerId(env) }) {
+  const players = await loadPlayers(store, env, chatId);
+  const follows = await loadFollows(store, env, chatId);
   const lines = [];
   const found = [];
   for (const r of await fetchAll(fetch, env, players, follows)) {
@@ -398,7 +558,7 @@ export async function runTestAlerts({ fetch, store, env, limit = 3 }) {
     lines.push(`${r.name}: ok, ${r.value.length} items, ${m.length} about your players`);
     found.push(...m);
   }
-  await send(fetch, env, "🧪 Source check\n" + escapeHtml(lines.join("\n")));
+  await send(fetch, env, "🧪 Source check\n" + escapeHtml(lines.join("\n")), chatId);
   const keysSeen = new Set();
   const unique = found.filter(([item]) => {
     const keys = contentKeys(item);
@@ -409,9 +569,9 @@ export async function runTestAlerts({ fetch, store, env, limit = 3 }) {
   found.length = 0; found.push(...unique);
   found.sort((a, b) => (b[0].published?.getTime() || 0) - (a[0].published?.getTime() || 0));
   if (!found.length) {
-    await send(fetch, env, "No current news mentions your players. Try /add a player who is in today's news.");
+    await send(fetch, env, "No current news mentions your players. Try /add a player who is in today's news.", chatId);
   }
-  for (const [item, hits] of found.slice(0, limit)) await send(fetch, env, "🧪 TEST\n" + formatItem(item, hits));
+  for (const [item, hits] of found.slice(0, limit)) await send(fetch, env, "🧪 TEST\n" + formatItem(item, hits), chatId);
   return lines;
 }
 
@@ -422,51 +582,126 @@ const HELP =
   "/follow handle [all] – follow a Bluesky account (posts about your players; 'all' = every post)\n" +
   "/unfollow handle – stop following\n/following – followed accounts\n" +
   "/status – source health\n/test – check sources + send sample alerts";
+const OWNER_HELP =
+  "\n\nAdmin:\n/admin – link to the users page\n/users – customers and their access\n" +
+  "/approve id [days] – open access (no days = no expiry)\n/block id – close access";
 
-export async function handleUpdate({ update, fetch, store, env }) {
+// A customer who isn't active: register the request, tell the owner once, answer with how to pay.
+async function gate({ fetch, store, env, msg, now, log }) {
+  const id = String(msg.chat.id);
+  const from = msg.from || msg.chat;
+  const name = [from.first_name, from.last_name].filter(Boolean).join(" ").slice(0, 80);
+  const username = (from.username || "").slice(0, 40);
+  const { user, isNew } = await updateUsers(store, (users) => {
+    const u = users[id];
+    if (!u) {
+      users[id] = { chatId: id, name, username, status: "pending", requestedAt: new Date(now).toISOString() };
+      return { user: users[id], isNew: true };
+    }
+    Object.assign(u, { name: name || u.name, username: username || u.username });
+    if (isActive(u, now) || u.status === "blocked") return { user: { ...u } };
+    const renewal = u.status !== "pending"; // expired user writes again -> new request
+    if (renewal) Object.assign(u, { status: "pending", requestedAt: new Date(now).toISOString() });
+    return { user: { ...u }, isNew: renewal };
+  });
+  if (isActive(user, now)) return null;
+  if (user.status === "blocked") {
+    await send(fetch, env, "⛔ Таны эрх хаагдсан байна.", id);
+    return "blocked";
+  }
+  await send(fetch, env, escapeHtml(paymentText(env, id)), id);
+  if (isNew) {
+    const site = ((await loadState(store)).webhookUrl || "").replace(/\/telegram$/, "");
+    await send(fetch, env, escapeHtml(`🆕 Шинэ хүсэлт: ${userLabel(user)}\nID: ${id}\n\n` +
+      `Төлбөр орсны дараа: /approve ${id}` + (site ? `\nЭсвэл: ${adminLink(site, env)}` : "")))
+      .catch((e) => log.warn("owner notice failed:", e.message));
+  }
+  return "pending";
+}
+
+async function ownerCommand({ fetch, store, env, cmd, arg, now }) {
+  if (cmd === "/admin") {
+    const site = ((await loadState(store)).webhookUrl || "").replace(/\/telegram$/, "");
+    return site ? `🔐 ${adminLink(site, env)}` : "Site URL not known yet – wait for the first scheduled run.";
+  }
+  if (cmd === "/users") {
+    const list = await listUsers(store, env, now);
+    if (!list.length) return "No customers yet. They appear here after they message the bot.";
+    const icon = { pending: "🕓", active: "✅", expired: "⌛", blocked: "⛔" };
+    return list.map((u) => `${icon[u.status] || "•"} ${userLabel(u)} – ${u.chatId}` +
+      (u.expiresAt ? ` – until ${fmtDate(u.expiresAt)}` : "") + ` – ${u.players} players`).join("\n");
+  }
+  if (cmd === "/approve" || cmd === "/block") {
+    const [id, days] = arg.split(/\s+/);
+    if (!/^\d+$/.test(id || "")) return `Usage: ${cmd} <id>${cmd === "/approve" ? " [days]" : ""}`;
+    if (days && !/^\d+$/.test(days)) return "Days must be a number, e.g. /approve 12345 30";
+    try {
+      const u = await setUserAccess({ fetch, store, env, chatId: id, now,
+        status: cmd === "/approve" ? "active" : "blocked",
+        expiresAt: cmd === "/approve" ? (days ? new Date(now + Number(days) * 864e5).toISOString() : null) : undefined });
+      return cmd === "/approve"
+        ? `✅ Opened: ${userLabel(u)}${u.expiresAt ? ` until ${fmtDate(u.expiresAt)}` : " (no expiry)"}`
+        : `⛔ Blocked: ${userLabel(u)}`;
+    } catch (e) { return e.message; }
+  }
+  return null;
+}
+
+export async function handleUpdate({ update, fetch, store, env, now = Date.now(), log = console }) {
   // Telegram retries if we're slow; process each update_id only once.
   const tgState = (await store.get("tg", { type: "json" })) || { lastUpdateId: 0 };
   if (update.update_id <= tgState.lastUpdateId) return "duplicate";
   await store.setJSON("tg", { lastUpdateId: update.update_id });
 
   const msg = update.message || {};
-  if (String(msg.chat?.id) !== String(env.TELEGRAM_CHAT_ID)) return "ignored"; // owner only
+  if (msg.chat?.id == null) return "ignored";
+  const chatId = String(msg.chat.id);
+  const owner = isOwner(env, chatId);
+  if (!owner) {
+    if (msg.chat.type !== "private") return "ignored"; // customers only in private chats
+    const blocked = await gate({ fetch, store, env, msg, now, log });
+    if (blocked) return blocked;
+  }
   const text = (msg.text || "").trim();
   if (!text.startsWith("/")) return "ignored";
   const [cmdRaw, ...rest] = text.split(/\s+/);
   const cmd = cmdRaw.split("@")[0].toLowerCase();
   const arg = rest.join(" ").trim();
 
-  let players = await loadPlayers(store, env);
-  let reply;
+  let reply = owner ? await ownerCommand({ fetch, store, env, cmd, arg, now }) : null;
+  if (reply != null) {
+    await send(fetch, env, escapeHtml(reply), chatId);
+    return cmd;
+  }
+  let players = await loadPlayers(store, env, chatId);
   if (cmd === "/add" && arg) {
     const added = [];
     for (const p of parsePlayerList(arg)) if (!findPlayer(players, p.name)) { players.push(p); added.push(p.name); }
-    await store.setJSON("players", players);
+    await savePlayers(store, env, chatId, players);
     reply = added.length ? "Added: " + added.join(", ") : "Already tracked.";
   } else if ((cmd === "/remove" || cmd === "/rm") && arg) {
     const p = findPlayer(players, arg);
-    if (p) { players = players.filter((x) => x !== p); await store.setJSON("players", players); }
+    if (p) { players = players.filter((x) => x !== p); await savePlayers(store, env, chatId, players); }
     reply = p ? `Removed ${p.name}.` : `Not tracked: ${arg}`;
   } else if (cmd === "/list") {
     const names = players.map((p) => p.name + (p.aliases.length ? ` (${p.aliases.join("/")})` : "")).sort();
     reply = names.length ? `Tracking ${names.length} players:\n` + names.map((n) => "• " + n).join("\n") : "No players yet. /add Name";
   } else if (cmd === "/sources") {
-    reply = formatSources(await describeSources(store, env));
+    reply = formatSources(await describeSources(store, env, chatId));
   } else if (cmd === "/status") {
     const st = await loadState(store);
     reply = Object.entries(st.status).map(([k, v]) => `${k}: ${v}`).join("\n") || "No polls yet.";
     reply += `\nLast run: ${st.lastRun || "never"}`;
   } else if (cmd === "/follow" && arg) {
-    reply = await followCommand({ fetch, store, env, arg });
+    reply = await followCommand({ fetch, store, env, arg, chatId });
   } else if (cmd === "/unfollow" && arg) {
-    const follows = await loadFollows(store, env);
+    const follows = await loadFollows(store, env, chatId);
     const h = normalizeHandle(arg);
     const f = follows.find((x) => x.handle === h || x.did === h);
-    if (f) await store.setJSON("follows", follows.filter((x) => x !== f));
+    if (f) await store.setJSON(followsKey(env, chatId), follows.filter((x) => x !== f));
     reply = f ? `Unfollowed @${f.handle}.` : `Not following: ${arg}`;
   } else if (cmd === "/following" || cmd === "/follow") {
-    const follows = await loadFollows(store, env);
+    const follows = await loadFollows(store, env, chatId);
     reply = follows.length
       ? "Following on Bluesky:\n" + follows.map((f) => `• @${f.handle}${f.name ? ` (${f.name})` : ""} – ${f.mode === "all" ? "every post" : "your players only"}`).join("\n")
       : "Not following anyone.";
@@ -474,14 +709,14 @@ export async function handleUpdate({ update, fetch, store, env }) {
   } else if (cmd === "/web") {
     const st = await loadState(store);
     const site = (st.webhookUrl || "").replace(/\/telegram$/, "");
-    reply = site ? `⚙️ ${webLink(site, env)}` : "Site URL not known yet – wait for the first scheduled run.";
+    reply = site ? `⚙️ ${webLink(site, env, chatId)}` : "Site URL not known yet – wait for the first scheduled run.";
   } else if (cmd === "/test") {
-    await runTestAlerts({ fetch, store, env });
+    await runTestAlerts({ fetch, store, env, chatId });
     return "test";
   } else {
-    reply = HELP;
+    reply = HELP + (owner ? OWNER_HELP : "");
   }
-  await send(fetch, env, escapeHtml(reply));
+  await send(fetch, env, escapeHtml(reply), chatId);
   return cmd;
 }
 
@@ -542,7 +777,7 @@ export async function getRoster({ fetch, store, now = Date.now(), force = false 
 }
 
 // Give players added by name (Telegram /add, PLAYERS env) their ESPN id + team from the roster.
-export async function enrichPlayers({ fetch, store, players, now = Date.now(), log = console }) {
+export async function enrichPlayers({ fetch, store, players, now = Date.now(), log = console, key = "players" }) {
   if (!players.some((p) => !p.espnId)) return false;
   let roster;
   try { roster = await getRoster({ fetch, store, now }); } catch (e) { log.warn("roster unavailable:", e.message); return false; }
@@ -553,7 +788,7 @@ export async function enrichPlayers({ fetch, store, players, now = Date.now(), l
     const r = byKey.get(stripSuffix(p.name)) || roster.players.find((x) => p.aliases.some((a) => stripSuffix(a) === stripSuffix(x.name)));
     if (r?.id) { p.espnId = r.id; p.team = r.team; changed = true; }
   }
-  if (changed) await store.setJSON("players", players);
+  if (changed) await store.setJSON(key, players);
   return changed;
 }
 
@@ -576,19 +811,19 @@ export function sanitizePlayers(list) {
 }
 
 // /follow <handle> [all]
-export async function followCommand({ fetch, store, env, arg, now = Date.now() }) {
+export async function followCommand({ fetch, store, env, arg, now = Date.now(), chatId }) {
   if (/(^|\/\/|\.)(x|twitter)\.com\b/i.test(arg)) {
     return "X/Twitter accounts can't be read for free – only Bluesky accounts work.\nExample: /follow shamsbot.bsky.social";
   }
   const parts = arg.split(/\s+/).filter(Boolean);
   const mode = parts.slice(1).some((p) => p.toLowerCase() === "all") ? "all" : "players";
-  const follows = await loadFollows(store, env);
+  const follows = await loadFollows(store, env, chatId);
   let info;
   try { info = await resolveBsky(fetch, parts[0]); } catch (e) { return e.message + "\nExample: /follow shamsbot.bsky.social"; }
   const existing = follows.find((f) => f.did === info.did || f.handle === info.handle);
   if (!existing && follows.length >= MAX_FOLLOWS) return `You can follow up to ${MAX_FOLLOWS} accounts. /unfollow one first.`;
   const entry = { handle: info.handle, did: info.did, name: info.name, lastPostAt: info.lastPostAt, mode };
-  await store.setJSON("follows", existing ? follows.map((f) => (f === existing ? entry : f)) : [...follows, entry]);
+  await store.setJSON(followsKey(env, chatId), existing ? follows.map((f) => (f === existing ? entry : f)) : [...follows, entry]);
   let msg = `${existing ? "Updated" : "Following"} @${info.handle}${info.name ? ` (${info.name})` : ""} – ` +
     (mode === "all" ? "you'll get every post." : "you'll get posts that mention your players.");
   const ageDays = info.lastPostAt ? (now - Date.parse(info.lastPostAt)) / 864e5 : Infinity;
@@ -599,9 +834,9 @@ export async function followCommand({ fetch, store, env, arg, now = Date.now() }
 }
 
 // validate a follow list coming from the web page; resolves new handles via Bluesky
-export async function saveFollowsFromWeb({ fetch, store, env, list }) {
+export async function saveFollowsFromWeb({ fetch, store, env, list, chatId }) {
   if (!Array.isArray(list)) throw new Error("follows must be an array");
-  const current = await loadFollows(store, env);
+  const current = await loadFollows(store, env, chatId);
   const out = [];
   for (const raw of list.slice(0, MAX_FOLLOWS)) {
     const h = normalizeHandle(raw?.handle);
@@ -614,7 +849,7 @@ export async function saveFollowsFromWeb({ fetch, store, env, list }) {
     }
     if (!out.some((f) => f.did === entry.did)) out.push({ ...entry, mode });
   }
-  await store.setJSON("follows", out);
+  await store.setJSON(followsKey(env, chatId), out);
   return out;
 }
 
@@ -630,10 +865,10 @@ export const SOURCE_INFO = {
                mn: "ESPN-ий гол нийтлэлүүд (видео, тойм, урьдчилсан тойм алгасна)" },
 };
 
-export async function describeSources(store, env) {
+export async function describeSources(store, env, chatId) {
   const state = await loadState(store);
-  const players = await loadPlayers(store, env);
-  const follows = await loadFollows(store, env);
+  const players = await loadPlayers(store, env, chatId);
+  const follows = await loadFollows(store, env, chatId);
   const enabled = new Set(sourceList(env, players, follows).map(([n]) => n));
   const all = sourceList({ ...env, DISABLE_SOURCES: "" }, players, follows).map(([n]) => n);
   const extra = (env.EXTRA_RSS || "").split(",").map((x) => x.trim()).filter(Boolean);
