@@ -5,8 +5,9 @@ const FETCH_TIMEOUT_MS = 8000;
 
 // core's user object <-> users row
 const USER_COLS = [["chatId", "chat_id"], ["name", "name"], ["username", "username"], ["status", "status"],
-  ["requestedAt", "requested_at"], ["activatedAt", "activated_at"], ["expiresAt", "expires_at"], ["note", "note"]];
-const DATE_FIELDS = new Set(["requestedAt", "activatedAt", "expiresAt"]);
+  ["requestedAt", "requested_at"], ["activatedAt", "activated_at"], ["expiresAt", "expires_at"], ["note", "note"],
+  ["plan", "plan"], ["trialStartedAt", "trial_started_at"]];
+const DATE_FIELDS = new Set(["requestedAt", "activatedAt", "expiresAt", "trialStartedAt"]);
 const TEXT_FIELDS = new Set(["name", "username", "note"]);
 
 function fromRow(r) {
@@ -20,6 +21,7 @@ function fromRow(r) {
 function toRow(u, now) {
   const r = { updated_at: now };
   for (const [k, col] of USER_COLS) r[col] = TEXT_FIELDS.has(k) ? String(u[k] ?? "") : (u[k] ?? null);
+  r.plan = u.plan || "basic"; // column is not null
   return r;
 }
 

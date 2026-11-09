@@ -36,7 +36,7 @@
   .user .meta { color: var(--muted); font-size: 13px; }
   .user .meta a { color: inherit; }
   .badge { font-size: 12px; font-weight: 600; border-radius: 999px; padding: 2px 10px; background: var(--chip); flex: none; }
-  .badge.active { color: var(--ok); } .badge.pending { color: var(--warn); }
+  .badge.active { color: var(--ok); } .badge.pending, .badge.trial { color: var(--warn); }
   .badge.expired, .badge.blocked { color: var(--bad); }
   .user .note { width: 100%; margin-top: 10px; }
   .user .actions { margin-top: 10px; }
@@ -91,7 +91,12 @@
   if (new URLSearchParams(location.search).has("key")) history.replaceState(null, "", location.pathname);
 
   let users = [], filter = "pending";
-  const LABEL = { pending: "Хүлээгдэж буй", active: "Идэвхтэй", expired: "Дууссан", blocked: "Хаасан" };
+  const LABEL = { pending: "Хүлээгдэж буй", trial: "Туршилт", active: "Идэвхтэй", expired: "Дууссан", blocked: "Хаасан" };
+  // the basic plan's player limit, as the server reports it
+  const basicLimit = () => users.find((u) => u.plan !== "unlimited" && u.limit != null)?.limit ?? 10;
+  const planName = (plan) => ({ trial: `Туршилт (${basicLimit()} тоглогч)`, basic: `${basicLimit()} тоглогч`, unlimited: "Хязгааргүй" })[plan] || plan;
+  // what the card and tabs show: an active trial is its own group, a passed end date counts as expired
+  const statusOf = (u) => (u.status === "active" && !u.active ? "expired" : u.status === "active" && u.plan === "trial" ? "trial" : u.status);
 
   const api = async (path, opts = {}) => {
     const res = await fetch(path, { ...opts, headers: { "x-key": k || "", "Content-Type": "application/json" } });
@@ -148,8 +153,8 @@
   async function update(u, body, done) {
     flash("Хадгалж байна…");
     try {
-      const nu = await api(`/api/admin/users/${u.chatId}`, { method: "PUT", body: JSON.stringify(body) });
-      Object.assign(u, nu, { active: nu.status === "active" && (!nu.expiresAt || Date.parse(nu.expiresAt) > Date.now()) });
+      await api(`/api/admin/users/${u.chatId}`, { method: "PUT", body: JSON.stringify(body) });
+      users = await api("/api/admin/users"); // plan, limit and status as the server sees them
       flash(done || "Хадгалсан ✓");
       render();
     } catch (e) { if (e.message !== "unauthorized") flash("Алдаа: " + e.message, true); }
@@ -165,24 +170,29 @@
     const date = el("input", { type: "date", "aria-label": "Дуусах огноо", hidden: "" });
     sel.addEventListener("change", () => { date.hidden = sel.value !== "date"; });
     const expiry = () => ({ season: seasonEnd(), "30": plusDays(30), "90": plusDays(90), none: "", date: date.value })[sel.value];
-    const label = u.active ? "Сунгах" : "Эрх нээх";
+    const plan = el("select", { "aria-label": "Багц" },
+      el("option", { value: "basic" }, `${basicLimit()} тоглогч`),
+      el("option", { value: "unlimited" }, "Хязгааргүй"));
+    plan.value = u.plan === "unlimited" ? "unlimited" : "basic";
+    const renew = u.active && u.plan !== "trial";
     const go = el("button", { class: "primary", onclick: () => {
       const exp = expiry();
       if (sel.value === "date" && !exp) { flash("Огноо сонгоно уу", true); return; }
-      update(u, { status: "active", expiresAt: exp }, u.active ? "Сунгасан ✓" : "Эрх нээгдлээ ✓ Хэрэглэгчид мэдэгдсэн");
-    } }, label);
-    return [sel, date, go];
+      update(u, { status: "active", expiresAt: exp, plan: plan.value }, renew ? "Хадгалсан ✓" : "Эрх нээгдлээ ✓ Хэрэглэгчид мэдэгдсэн");
+    } }, renew ? "Сунгах / солих" : "Эрх нээх");
+    return [plan, sel, date, go];
   }
 
   function card(u) {
     const handle = u.username ? el("a", { href: "https://t.me/" + u.username, target: "_blank", rel: "noopener" }, "@" + u.username) : null;
-    const status = u.status === "active" && !u.active ? "expired" : u.status;
+    const status = statusOf(u);
     const dates = [
+      "Багц: " + planName(u.plan),
       u.requestedAt && "Хүсэлт: " + day(u.requestedAt),
       u.activatedAt && "Нээсэн: " + day(u.activatedAt),
       u.status === "active" ? (u.expiresAt ? "Дуусах: " + day(u.expiresAt) : "Хугацаагүй") : null,
       u.status === "expired" && u.expiresAt ? "Дууссан: " + day(u.expiresAt) : null,
-      `${u.players} тоглогч`,
+      `${u.players}${u.limit != null ? "/" + u.limit : ""} тоглогч`,
     ].filter(Boolean).join(" · ");
     const note = el("input", { class: "note", placeholder: "Тэмдэглэл (жишээ: 11/09 Хаан банкаар төлсөн)", value: u.note || "" });
     note.addEventListener("change", () => update(u, { note: note.value }));
@@ -203,11 +213,10 @@
   }
 
   function render() {
-    const statusOf = (u) => (u.status === "active" && !u.active ? "expired" : u.status);
     const count = (s) => users.filter((u) => statusOf(u) === s).length;
-    $("summary").textContent = `Идэвхтэй: ${count("active")} · Хүлээгдэж буй: ${count("pending")} · Нийт: ${users.length}`;
+    $("summary").textContent = `Төлсөн: ${count("active")} · Туршилт: ${count("trial")} · Хүлээгдэж буй: ${count("pending")} · Нийт: ${users.length}`;
     const tabs = $("tabs"); tabs.replaceChildren();
-    for (const s of ["pending", "active", "expired", "blocked", "all"]) {
+    for (const s of ["pending", "trial", "active", "expired", "blocked", "all"]) {
       const n = s === "all" ? users.length : count(s);
       tabs.append(el("button", { class: s === filter ? "on" : "", onclick: () => { filter = s; render(); } },
         `${s === "all" ? "Бүгд" : LABEL[s]} (${n})`));

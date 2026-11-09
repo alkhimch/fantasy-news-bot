@@ -36,7 +36,7 @@ function fakeSupabase() {
   return { db, calls, fetch };
 }
 
-const env = { TELEGRAM_BOT_TOKEN: "T", TELEGRAM_CHAT_ID: "42", PLAYERS: "Nikola Jokic", FOLLOWS: "", DISABLE_SOURCES: "espn_news,bluesky" };
+const env = { TELEGRAM_BOT_TOKEN: "T", TELEGRAM_CHAT_ID: "42", PLAYERS: "Nikola Jokic", FOLLOWS: "", DISABLE_SOURCES: "espn_news,bluesky", TRIAL_DAYS: "0" };
 const open = (sb, blobs) => supabaseStore({ url: "https://p.supabase.co/", key: "sb_secret_x", fetch: sb.fetch, ownerId: "42", fallback: blobs });
 
 test("customer data goes to Supabase tables, bot state stays in Blobs", async () => {
@@ -62,6 +62,7 @@ test("customer data goes to Supabase tables, bot state stays in Blobs", async ()
   await msg(7, "/follow nobody");          // fails at Bluesky lookup; list stays
   const row = sb.db.users.get("7");
   assert.equal(row.status, "active"); assert.equal(row.username, "bat99"); assert.match(row.expires_at, /\+00:00$/);
+  assert.equal(row.plan, "basic");
   assert.deepEqual(sb.db.players.get("7").list.map((p) => p.name), ["LeBron James"]);
   assert.ok(blobs.m.has("tg"));
 

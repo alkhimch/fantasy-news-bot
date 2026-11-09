@@ -2,7 +2,7 @@
 // /api/admin/* needs the owner's admin key from /admin or a session from /api/admin/login.
 import {
   adminSession, describeSources, getRoster, isActive, isAdmin, isAdminEmail, isOwner, listUsers, loadFollows, loadPlayers,
-  loadUsers, sanitizePlayers, saveFollowsFromWeb, savePlayers, setUserAccess, userFromKey,
+  loadUsers, playerLimit, sanitizePlayers, saveFollowsFromWeb, savePlayers, setUserAccess, userFromKey,
 } from "../lib/core.mjs";
 import { openStore } from "../lib/store.mjs";
 import { passwordSignIn, supabaseKey } from "../lib/supabase.mjs";
@@ -43,7 +43,7 @@ export default async (req) => {
       if (m && req.method === "PUT") {
         const body = await req.json();
         try {
-          return json(await setUserAccess({ fetch, store, env, chatId: m[1], status: body.status, expiresAt: body.expiresAt, note: body.note }));
+          return json(await setUserAccess({ fetch, store, env, chatId: m[1], status: body.status, expiresAt: body.expiresAt, note: body.note, plan: body.plan }));
         } catch (e) {
           return json({ error: e.message }, 400); // unknown user, bad date/status
         }
@@ -53,7 +53,14 @@ export default async (req) => {
 
     const chatId = userFromKey(env, key);
     if (!chatId) return json({ error: "unauthorized" }, 401);
-    if (!isOwner(env, chatId) && !isActive((await loadUsers(store))[chatId])) return json({ error: "inactive" }, 403);
+    const user = isOwner(env, chatId) ? null : (await loadUsers(store))[chatId];
+    if (!isOwner(env, chatId) && !isActive(user)) return json({ error: "inactive" }, 403);
+    const limit = playerLimit(env, chatId, user);
+
+    if (path === "/api/me" && req.method === "GET") {
+      return json({ plan: isOwner(env, chatId) ? "owner" : user.plan || "basic", expiresAt: user?.expiresAt || null,
+                    limit: Number.isFinite(limit) ? limit : null });
+    }
 
     if (path === "/api/roster" && req.method === "GET") {
       return json(await getRoster({ fetch, store }));
@@ -64,6 +71,9 @@ export default async (req) => {
     if (path === "/api/players" && req.method === "PUT") {
       const body = await req.json();
       const players = sanitizePlayers(body.players);
+      if (players.length > limit) {
+        return json({ error: `Таны багц ${limit} хүртэл тоглогчтой. Хязгааргүй багц руу шилжих бол Telegram дээр /plan`, limit }, 400);
+      }
       await savePlayers(store, env, chatId, players);
       return json(players);
     }

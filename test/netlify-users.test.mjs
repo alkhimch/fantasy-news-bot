@@ -3,13 +3,13 @@ import assert from "node:assert/strict";
 import * as core from "../netlify/lib/core.mjs";
 
 const env = { TELEGRAM_BOT_TOKEN: "T", TELEGRAM_CHAT_ID: "42", PLAYERS: "Nikola Jokic", FOLLOWS: "",
-              DISABLE_SOURCES: "espn_news,bluesky", PAYMENT_INFO: "Хаан банк 5000123456 (Бат)" };
+              DISABLE_SOURCES: "espn_news,bluesky", PAYMENT_INFO: "Хаан банк 5000123456 (Бат)", TRIAL_DAYS: "0" };
 const quiet = { log() {}, warn() {}, error() {} };
 const memStore = () => { const m = new Map(); return { m,
   get: async (k) => (m.has(k) ? JSON.parse(m.get(k)) : null), setJSON: async (k, v) => m.set(k, JSON.stringify(v)) }; };
 const okText = (body) => ({ ok: true, status: 200, text: async () => body, json: async () => JSON.parse(body) });
 
-function world() {
+function world(e = env) {
   const w = { sent: [], rss: "", store: memStore(), id: 0 };
   w.fetch = async (url, opts) => {
     if (url.startsWith("https://api.telegram.org/")) {
@@ -23,8 +23,8 @@ function world() {
   w.to = (id) => w.sent.filter((s) => s.to === String(id)).map((s) => s.text);
   w.msg = (chat, text, extra = {}) => core.handleUpdate({ update: { update_id: ++w.id, message: {
     chat: { id: chat, type: chat === 42 ? undefined : "private" }, from: { first_name: "Bat", username: "bat99" }, text, ...extra } },
-    fetch: w.fetch, store: w.store, env, now: w.now, log: quiet });
-  w.poll = () => core.runPoll({ fetch: w.fetch, store: w.store, env, now: w.now, siteUrl: "https://s.netlify.app", log: quiet });
+    fetch: w.fetch, store: w.store, env: e, now: w.now, log: quiet });
+  w.poll = () => core.runPoll({ fetch: w.fetch, store: w.store, env: e, now: w.now, siteUrl: "https://s.netlify.app", log: quiet });
   w.item = (guid, title) => { w.rss += `<item><guid>${guid}</guid><title>${title}</title><description>${title} news.</description><pubDate>${new Date(w.now ?? Date.now()).toUTCString()}</pubDate></item>`; };
   return w;
 }
@@ -32,7 +32,7 @@ function world() {
 test("customer asks, gets payment info; owner told once; commands closed until approved", async () => {
   const w = world();
   assert.equal(await w.msg(7, "/start"), "pending");
-  assert.match(w.to(7)[0], /Үнэ: 50,000₮\nХаан банк 5000123456 \(Бат\)\nГүйлгээний утга: 7/);
+  assert.match(w.to(7)[0], /Багцууд:\n• 10 хүртэл тоглогч – 50,000₮\n• Хязгааргүй тоглогч – 150,000₮\n\nХаан банк 5000123456 \(Бат\)\nГүйлгээний утга: 7/);
   assert.match(w.to(42)[0], /🆕 Шинэ хүсэлт: Bat @bat99\nID: 7\n\nТөлбөр орсны дараа: \/approve 7/);
   assert.equal(await w.msg(7, "/add LeBron James"), "pending");
   assert.equal(w.to(42).length, 1, "owner not notified twice");
@@ -48,7 +48,7 @@ test("/approve opens access with a private web link; players are per user", asyn
   await w.poll(); // learns the site URL
   await w.msg(7, "/start");
   await w.msg(42, "/approve 7 30");
-  assert.match(w.to(42).at(-1), /^✅ Эрх нээлээ: Bat @bat99 \(\d{4}-\d\d-\d\d хүртэл\)$/);
+  assert.match(w.to(42).at(-1), /^✅ Эрх нээлээ: Bat @bat99 – 10 хүртэл тоглогч \(\d{4}-\d\d-\d\d хүртэл\)$/);
   const welcome = w.to(7).at(-1);
   assert.match(welcome, /✅ Таны эрх нээгдлээ! \(\d{4}-\d\d-\d\d хүртэл\)/);
   assert.ok(welcome.includes("https://s.netlify.app/?key=" + core.webKey(env, "7")), welcome);
@@ -70,7 +70,7 @@ test("/approve opens access with a private web link; players are per user", asyn
   assert.ok(w.to(7).at(-1).startsWith("Командууд:") && !w.to(7).at(-1).includes("Админ"), "customers get the help without admin part");
 
   await w.msg(42, "/users");
-  assert.match(w.to(42).at(-1), /✅ Bat @bat99 – 7 – \d{4}-\d\d-\d\d хүртэл – 1 тоглогч/);
+  assert.match(w.to(42).at(-1), /✅ Bat @bat99 – 7 – 10 хүртэл тоглогч – \d{4}-\d\d-\d\d хүртэл – 1 тоглогч/);
   await w.msg(42, "/block 7");
   assert.equal(await w.msg(7, "/list"), "blocked");
   assert.equal(w.to(7).at(-1), "⛔ Таны эрх хаагдсан байна.");
@@ -185,4 +185,89 @@ test("admin password-login sessions: signed, 30 days, revoked by removing the em
   assert.ok(core.isAdmin(e, core.adminKey(e), now) && core.isAdmin(e, t, now), "link key and session both work");
   assert.ok(!core.isAdmin(e, core.webKey(e), now) && !core.isAdmin(e, null, now));
   assert.ok(body.length > 10);
+});
+
+const trialEnv = { ...env, TRIAL_DAYS: "7" };
+const twelve = Array.from({ length: 12 }, (_, i) => `Player ${String.fromCharCode(65 + i)}`);
+
+test("trial: starts on first message, 10-player limit, ends after 7 days, only once", async () => {
+  const w = world(trialEnv);
+  w.now = Date.parse("2026-11-10T00:00:00Z");
+  await w.poll();
+  assert.equal(await w.msg(7, "/start"), "trial");
+  const welcome = w.to(7)[0];
+  assert.match(welcome, /^🎁 7 хоногийн үнэгүй туршилт эхэллээ! \(2026-11-17 хүртэл\)\nБагц: Үнэгүй туршилт \(10 хүртэл тоглогч\)/);
+  assert.ok(welcome.includes("/?key=" + core.webKey(trialEnv, "7")) && welcome.includes("\n/plan "));
+  assert.match(w.to(42).at(-1), /^🎁 Туршилт эхэллээ: Bat @bat99\nID: 7\n2026-11-17 хүртэл$/);
+  const u = (await w.store.get("users"))["7"];
+  assert.deepEqual([u.status, u.plan, u.trialStartedAt], ["active", "trial", "2026-11-10T00:00:00.000Z"]);
+
+  await w.msg(7, "/add " + twelve.join(", "));
+  assert.match(w.to(7).at(-1), /^Нэмлээ: Player A, .*Player J\n\n⚠️ Таны багц 10 хүртэл тоглогчтой тул нэмэгдсэнгүй: Player K, Player L\nХязгааргүй багц: 150,000₮ – дэлгэрэнгүй: \/plan$/);
+  assert.equal((await w.store.get("players/7")).length, 10);
+  await w.msg(7, "/list");
+  assert.match(w.to(7).at(-1), /^Таны тоглогчид \(10\/10\):/);
+  await w.msg(7, "/plan");
+  assert.match(w.to(7).at(-1), /^📦 Таны багц: Үнэгүй туршилт \(10 хүртэл тоглогч\) – 2026-11-17 хүртэл\nТоглогч: 10\/10\n\nБагцууд:\n• 10 хүртэл тоглогч – 50,000₮\n• Хязгааргүй тоглогч – 150,000₮/);
+
+  w.now += 8 * 864e5;
+  w.sent.length = 0;
+  await w.poll();
+  assert.match(w.to(7)[0], /^⌛ Таны үнэгүй туршилт дууслаа\./);
+  assert.match(w.to(42)[0], /^⌛ Туршилт дууслаа: Bat @bat99 \(7\)/);
+  assert.equal(await w.msg(7, "/list"), "pending", "no second trial");
+  assert.match(w.to(42).at(-1), /^🆕 Шинэ хүсэлт: Bat @bat99/);
+
+  await w.msg(42, "/approve 7 30");
+  assert.match(w.to(42).at(-1), /^✅ Эрх нээлээ: Bat @bat99 – 10 хүртэл тоглогч \(/);
+  assert.match(w.to(7).at(-1), /^✅ Таны эрх нээгдлээ! \(\d{4}-\d\d-\d\d хүртэл\)\nБагц: 10 хүртэл тоглогч/);
+});
+
+test("plans: paying during the trial, upgrading to unlimited, /approve options", async () => {
+  const w = world(trialEnv);
+  await w.poll();
+  await w.msg(7, "/start");
+  await w.msg(42, "/approve 7 30");                        // paid while still on trial -> basic, told
+  assert.equal((await w.store.get("users"))["7"].plan, "basic");
+  assert.match(w.to(7).at(-1), /^✅ Таны эрх нээгдлээ!.*\nБагц: 10 хүртэл тоглогч/);
+  await w.msg(7, "/add " + twelve.join(", "));
+  assert.equal((await w.store.get("players/7")).length, 10);
+
+  await w.msg(42, "/approve 7 90 unlimited");
+  assert.match(w.to(42).at(-1), /– Хязгааргүй тоглогч \(/);
+  assert.match(w.to(7).at(-1), /\nБагц: Хязгааргүй тоглогч/, "user told about the upgrade");
+  await w.msg(7, "/add Player K, Player L");
+  assert.equal(w.to(7).at(-1), "Нэмлээ: Player K, Player L");
+  await w.msg(7, "/list");
+  assert.match(w.to(7).at(-1), /^Таны тоглогчид \(12\):/);
+  const n = w.to(7).length;
+  await w.msg(42, "/approve 7 120");                       // renewal keeps the plan, no new welcome
+  assert.equal((await w.store.get("users"))["7"].plan, "unlimited");
+  assert.equal(w.to(7).length, n);
+
+  await w.msg(42, "/approve 7 soon");
+  assert.match(w.to(42).at(-1), /^Жишээ: \/approve 12345 30/);
+  const list = await core.listUsers(w.store, trialEnv);
+  assert.deepEqual([list[0].plan, list[0].limit, list[0].players], ["unlimited", null, 12]);
+  await assert.rejects(core.setUserAccess({ fetch: w.fetch, store: w.store, env: trialEnv, chatId: "7", plan: "gold" }), /Багц буруу/);
+});
+
+test("someone who asked before trials existed gets a trial; a long list after a downgrade alerts for the first 10 only", async () => {
+  const w = world(trialEnv);
+  w.now = Date.now();
+  await w.poll();
+  await w.store.setJSON("users", { 7: { chatId: "7", name: "Old", status: "pending", requestedAt: "2026-11-01T00:00:00.000Z" },
+                                   8: { chatId: "8", status: "active", plan: "basic" } });
+  assert.equal(await w.msg(7, "hi"), "trial");
+  await w.store.setJSON("players/8", twelve.map((name) => ({ name, aliases: [] })));
+  w.sent.length = 0;
+  w.item("j", "Player J: Out");
+  w.item("k", "Player K: Out");
+  await w.poll();
+  assert.deepEqual(w.to(8).map((t) => t.match(/<b>(.*?)<\/b>/)[1]), ["Player J"]);
+});
+
+test("TRIAL_DAYS=0 turns the trial off", async () => {
+  const w = world({ ...env, TRIAL_DAYS: "0" });
+  assert.equal(await w.msg(7, "/start"), "pending");
 });

@@ -142,7 +142,10 @@
   } catch (e) { /* storage blocked: key only lives in the URL */ }
   if (new URLSearchParams(location.search).has("key")) history.replaceState(null, "", location.pathname);
 
-  let roster = [], mine = [], saveTimer = null, rosterError = "", follows = [];
+  let roster = [], mine = [], saveTimer = null, rosterError = "", follows = [], limit = null;
+  const PLAN = { trial: "Үнэгүй туршилт", basic: "Энгийн багц", unlimited: "Хязгааргүй багц" };
+  const full = () => limit != null && mine.length >= limit;
+  const limitMsg = () => `Таны багц ${limit} хүртэл тоглогчтой. Хязгааргүй багц руу шилжих бол Telegram дээр /plan`;
   const SUGGEST = [
     { h: "shamsbot.bsky.social", d: "Shams Charania-ийн жиргээ (албан бус хуулбар)" },
     { h: "thesteinline.bsky.social", d: "Marc Stein" },
@@ -179,12 +182,17 @@
         mine = await api("/api/players", { method: "PUT", body: JSON.stringify({ players: mine }) });
         flash("Хадгалсан ✓");
         renderMine(); renderResults(); loadSources();
-      } catch (e) { if (e.message !== "unauthorized") flash("Хадгалж чадсангүй: " + e.message, true); }
+      } catch (e) {
+        if (e.message === "unauthorized") return;
+        flash("Хадгалж чадсангүй: " + e.message, true);
+        try { mine = await api("/api/players"); renderMine(); renderResults(); } catch (_) {}
+      }
     }, 350);
   }
 
   function toggle(p) {
     if (isMine(p)) mine = mine.filter((m) => !((p.id && m.espnId === p.id) || key(m.name) === key(p.name)));
+    else if (full()) { flash(limitMsg(), true); return; }
     else mine.push({ name: p.name, aliases: [], espnId: p.id || undefined, team: p.team || undefined });
     renderMine(); renderResults(); save();
   }
@@ -200,7 +208,7 @@
 
   function renderMine() {
     const box = $("mine"); box.replaceChildren();
-    $("mineTitle").textContent = `Сонгосон тоглогчид (${mine.length})`;
+    $("mineTitle").textContent = `Сонгосон тоглогчид (${mine.length}${limit != null ? "/" + limit : ""})`;
     if (!mine.length) { box.append(el("div", { class: "hint" }, "Одоогоор алга. Доороос хайж нэмнэ үү.")); return; }
     for (const m of [...mine].sort((a, b) => a.name.localeCompare(b.name))) {
       const label = m.aliases?.length ? ` (${m.aliases.join("/")})` : "";
@@ -247,6 +255,7 @@
     const name = (m && m[1] || "").trim();
     if (!name) return;
     if (mine.some((x) => key(x.name) === key(name))) { flash("Аль хэдийн нэмсэн"); return; }
+    if (full()) { flash(limitMsg(), true); return; }
     const aliases = (m[2] || "").split(/[\/|,]/).map((a) => a.trim()).filter(Boolean);
     const found = roster.find((p) => key(p.name) === key(name));
     mine.push({ name: found ? found.name : name, aliases, espnId: found?.id, team: found?.team });
@@ -331,6 +340,12 @@
     $("app").hidden = false;
     renderResults();
     try {
+      const me = await api("/api/me");
+      limit = me.limit;
+      if (PLAN[me.plan]) {
+        $("sub").textContent = PLAN[me.plan] + (me.limit != null ? ` · ${me.limit} хүртэл тоглогч` : " · хязгааргүй тоглогч") +
+          (me.expiresAt ? ` · ${new Date(me.expiresAt).toLocaleDateString()} хүртэл` : "");
+      }
       mine = await api("/api/players");
       renderMine();
     } catch (e) { if (e.message !== "unauthorized") flash("Ачаалж чадсангүй: " + e.message, true); return; }

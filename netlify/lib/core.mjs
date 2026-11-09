@@ -364,7 +364,23 @@ export async function updateUsers(store, fn) {
 export const isActive = (u, now = Date.now()) =>
   u?.status === "active" && (!u.expiresAt || Date.parse(u.expiresAt) > now);
 
-const PRICE = (env) => env.PRICE || "50,000₮";
+// Plans: "trial" (free, TRIAL_DAYS, same player limit as basic), "basic" (BASIC_PLAYER_LIMIT players),
+// "unlimited". A user without a plan (from before plans existed) counts as basic.
+export const PLANS = ["trial", "basic", "unlimited"];
+const TRIAL_DAYS = (env) => (env.TRIAL_DAYS != null && env.TRIAL_DAYS !== "" ? Number(env.TRIAL_DAYS) : 7);
+const BASIC_LIMIT = (env) => Number(env.BASIC_PLAYER_LIMIT) || 10;
+const PRICE_BASIC = (env) => env.PRICE_BASIC || env.PRICE || "50,000₮";
+const PRICE_UNLIMITED = (env) => env.PRICE_UNLIMITED || "150,000₮";
+const planOf = (u) => (PLANS.includes(u?.plan) ? u.plan : "basic");
+// max players for a user; Infinity for the owner and the unlimited plan
+export const playerLimit = (env, chatId, user) =>
+  isOwner(env, chatId) || planOf(user) === "unlimited" ? Infinity : BASIC_LIMIT(env);
+const planLabel = (env, plan) => ({
+  trial: `Үнэгүй туршилт (${BASIC_LIMIT(env)} хүртэл тоглогч)`,
+  basic: `${BASIC_LIMIT(env)} хүртэл тоглогч`,
+  unlimited: "Хязгааргүй тоглогч",
+})[plan];
+const priceLines = (env) => [`• ${BASIC_LIMIT(env)} хүртэл тоглогч – ${PRICE_BASIC(env)}`, `• Хязгааргүй тоглогч – ${PRICE_UNLIMITED(env)}`];
 const fmtDate = (iso) => (iso ? new Date(Date.parse(iso) + 8 * 3600e3).toISOString().slice(0, 10) : ""); // Ulaanbaatar
 const userLabel = (u) => [u.name, u.username && "@" + u.username].filter(Boolean).join(" ") || u.chatId;
 
@@ -374,12 +390,27 @@ function paymentText(env, chatId) {
     "",
     "Таны NBA fantasy тоглогчдын шинэ мэдээ (бэртэл, тоглох эсэх, арилжаа гэх мэт) гармагц Telegram-аар шууд мэдэгдэнэ.",
     "",
-    `Үнэ: ${PRICE(env)}`,
-    env.PAYMENT_INFO ? env.PAYMENT_INFO.replace(/\\n/g, "\n") : "Төлбөрийн мэдээллийг админаас аваарай.",
-    `Гүйлгээний утга: ${chatId}`,
+    "Багцууд:",
+    ...priceLines(env),
     "",
-    "Төлбөр баталгаажмагц эрх нээгдэж, энд мэдэгдэл ирнэ.",
+    ...howToPay(env, chatId),
   ].join("\n");
+}
+const howToPay = (env, chatId) => [
+  env.PAYMENT_INFO ? env.PAYMENT_INFO.replace(/\\n/g, "\n") : "Төлбөрийн мэдээллийг админаас аваарай.",
+  `Гүйлгээний утга: ${chatId}`,
+  "Шилжүүлсэн дүнгээр багц тодорхойлогдоно. Төлбөр баталгаажмагц энд мэдэгдэл ирнэ.",
+];
+
+// welcome when access opens: trial start, paid access, or a plan change
+function welcomeText(env, user, site) {
+  const until = user.expiresAt ? ` (${fmtDate(user.expiresAt)} хүртэл)` : "";
+  const lines = [user.plan === "trial"
+    ? `🎁 ${TRIAL_DAYS(env)} хоногийн үнэгүй туршилт эхэллээ!${until}`
+    : `✅ Таны эрх нээгдлээ!${until}`, `Багц: ${planLabel(env, planOf(user))}`, ""];
+  if (site) lines.push("Тоглогчоо сонгох:", webLink(site, env, user.chatId), "(Энэ линкийг хэнд ч бүү өг. Дахин авах: /web)", "");
+  lines.push(CUSTOMER_COMMANDS);
+  return lines.join("\n");
 }
 
 // sent with the welcome when access opens
@@ -391,6 +422,7 @@ const CUSTOMER_COMMANDS = [
   "/remove Нэр – тоглогч хасах",
   "/list – миний тоглогчид",
   "/web – вебээр тоглогч сонгох линк",
+  "/plan – миний багц, үнэ",
   "/follow хаяг – Bluesky хаяг дагах (ард нь all гэвэл бүх пост)",
   "/unfollow хаяг – дагахаа болих",
   "/following – дагаж буй хаягууд",
@@ -410,9 +442,10 @@ export function parseExpiry(v) {
 }
 
 // Owner action from the admin page or /approve /block: change a user's access; tells the user when opened.
-export async function setUserAccess({ fetch, store, env, chatId, status, expiresAt, note, now = Date.now(), log = console }) {
+export async function setUserAccess({ fetch, store, env, chatId, status, expiresAt, note, plan, now = Date.now(), log = console }) {
   const id = String(chatId);
   if (status != null && !["pending", "active", "expired", "blocked"].includes(status)) throw new Error(`Төлөв буруу байна: ${status}`);
+  if (plan != null && !PLANS.includes(plan)) throw new Error(`Багц буруу байна: ${plan}`);
   const exp = expiresAt === undefined ? undefined : parseExpiry(expiresAt);
   const { before, user } = await updateUsers(store, (users) => {
     const u = users[id];
@@ -421,16 +454,16 @@ export async function setUserAccess({ fetch, store, env, chatId, status, expires
     if (status != null) u.status = status;
     if (exp !== undefined) u.expiresAt = exp;
     if (note !== undefined) u.note = String(note).slice(0, 200);
+    if (plan != null) u.plan = plan;
+    else if (status === "active" && planOf(u) === "trial") u.plan = "basic"; // paid after the trial
     if (u.status === "active" && !isActive(before, now)) u.activatedAt = new Date(now).toISOString();
     return { before, user: { ...u } };
   });
   if (!user) throw new Error(`Хэрэглэгч олдсонгүй: ${id}`);
-  if (isActive(user, now) && !isActive(before, now)) {
+  // tell the user when access opens, or when an active user's plan changes (trial -> paid, upgrade)
+  if (isActive(user, now) && (!isActive(before, now) || planOf(before) !== planOf(user))) {
     const site = ((await loadState(store)).webhookUrl || "").replace(/\/telegram$/, "");
-    const lines = [`✅ Таны эрх нээгдлээ!${user.expiresAt ? ` (${fmtDate(user.expiresAt)} хүртэл)` : ""}`, ""];
-    if (site) lines.push("Тоглогчоо сонгох:", webLink(site, env, id), "(Энэ линкийг хэнд ч бүү өг. Дахин авах: /web)", "");
-    lines.push(CUSTOMER_COMMANDS);
-    await send(fetch, env, escapeHtml(lines.join("\n")), id).catch((e) => log.warn("welcome to", id, "failed:", e.message));
+    await send(fetch, env, escapeHtml(welcomeText(env, user, site)), id).catch((e) => log.warn("welcome to", id, "failed:", e.message));
   }
   return user;
 }
@@ -441,6 +474,8 @@ export async function listUsers(store, env, now = Date.now()) {
   const order = { pending: 0, active: 1, expired: 2, blocked: 3 };
   const out = await Promise.all(users.map(async (u) => ({
     ...u,
+    plan: planOf(u),
+    limit: Number.isFinite(playerLimit(env, u.chatId, u)) ? playerLimit(env, u.chatId, u) : null,
     active: isActive(u, now),
     players: ((await store.get(playersKey(env, u.chatId), { type: "json" })) || []).length,
   })));
@@ -570,7 +605,8 @@ async function loadAudience({ fetch, store, env, now, log }) {
   return Promise.all(ids.map(async (id) => {
     const players = await loadPlayers(store, env, id);
     await enrichPlayers({ fetch, store, players, now, log, key: playersKey(env, id) });
-    return { id, players, follows: await loadFollows(store, env, id) };
+    // a list longer than the plan allows (e.g. after a downgrade): only the first ones get alerts
+    return { id, players: players.slice(0, playerLimit(env, id, users[id])), follows: await loadFollows(store, env, id) };
   }));
 }
 
@@ -585,9 +621,11 @@ async function expireUsers({ fetch, store, env, now, log }) {
     return true;
   }));
   for (const u of done) {
-    await send(fetch, env, escapeHtml("⌛ Таны эрхийн хугацаа дууслаа.\n\n" + paymentText(env, u.chatId)), u.chatId)
+    const trial = planOf(u) === "trial";
+    await send(fetch, env, escapeHtml((trial ? "⌛ Таны үнэгүй туршилт дууслаа. Үргэлжлүүлэн ашиглах бол багцаа сонгоорой." : "⌛ Таны эрхийн хугацаа дууслаа.") +
+      "\n\n" + paymentText(env, u.chatId)), u.chatId)
       .catch((e) => log.warn("expiry notice to", u.chatId, "failed:", e.message));
-    await send(fetch, env, escapeHtml(`⌛ Эрх дууслаа: ${userLabel(u)} (${u.chatId})`)).catch(() => {});
+    await send(fetch, env, escapeHtml(`⌛ ${trial ? "Туршилт" : "Эрх"} дууслаа: ${userLabel(u)} (${u.chatId})`)).catch(() => {});
   }
 }
 
@@ -632,18 +670,32 @@ async function gate({ fetch, store, env, msg, now, log }) {
   const from = msg.from || msg.chat;
   const name = [from.first_name, from.last_name].filter(Boolean).join(" ").slice(0, 80);
   const username = (from.username || "").slice(0, 40);
-  const { user, isNew } = await updateUsers(store, (users) => {
+  const iso = new Date(now).toISOString();
+  const trialDays = TRIAL_DAYS(env);
+  const startTrial = (u) => Object.assign(u, { status: "active", plan: "trial", trialStartedAt: iso, activatedAt: iso,
+    expiresAt: new Date(now + trialDays * 864e5).toISOString() });
+  const { user, isNew, trial } = await updateUsers(store, (users) => {
     const u = users[id];
     if (!u) {
-      users[id] = { chatId: id, name, username, status: "pending", requestedAt: new Date(now).toISOString() };
+      users[id] = { chatId: id, name, username, status: "pending", requestedAt: iso };
+      if (trialDays > 0) return { user: { ...startTrial(users[id]) }, trial: true };
       return { user: users[id], isNew: true };
     }
     Object.assign(u, { name: name || u.name, username: username || u.username });
     if (isActive(u, now) || u.status === "blocked") return { user: { ...u } };
+    // asked before trials existed: they get one too
+    if (trialDays > 0 && !u.trialStartedAt && u.status === "pending") return { user: { ...startTrial(u) }, trial: true };
     const renewal = u.status !== "pending"; // expired user writes again -> new request
-    if (renewal) Object.assign(u, { status: "pending", requestedAt: new Date(now).toISOString() });
+    if (renewal) Object.assign(u, { status: "pending", requestedAt: iso });
     return { user: { ...u }, isNew: renewal };
   });
+  if (trial) {
+    const site = ((await loadState(store)).webhookUrl || "").replace(/\/telegram$/, "");
+    await send(fetch, env, escapeHtml(welcomeText(env, user, site)), id);
+    await send(fetch, env, escapeHtml(`🎁 Туршилт эхэллээ: ${userLabel(user)}\nID: ${id}\n${fmtDate(user.expiresAt)} хүртэл`))
+      .catch((e) => log.warn("owner notice failed:", e.message));
+    return "trial";
+  }
   if (isActive(user, now)) return null;
   if (user.status === "blocked") {
     await send(fetch, env, "⛔ Таны эрх хаагдсан байна.", id);
@@ -668,19 +720,23 @@ async function ownerCommand({ fetch, store, env, cmd, arg, now }) {
     const list = await listUsers(store, env, now);
     if (!list.length) return "Одоогоор хэрэглэгч алга. Хүн ботод бичихэд энд гарч ирнэ.";
     const icon = { pending: "🕓", active: "✅", expired: "⌛", blocked: "⛔" };
-    return list.map((u) => `${icon[u.status] || "•"} ${userLabel(u)} – ${u.chatId}` +
+    return list.map((u) => `${icon[u.status] || "•"} ${userLabel(u)} – ${u.chatId} – ${planLabel(env, u.plan)}` +
       (u.expiresAt ? ` – ${fmtDate(u.expiresAt)} хүртэл` : "") + ` – ${u.players} тоглогч`).join("\n");
   }
   if (cmd === "/approve" || cmd === "/block") {
-    const [id, days] = arg.split(/\s+/);
-    if (!/^\d+$/.test(id || "")) return `Хэрэглээ: ${cmd} ID${cmd === "/approve" ? " [хоног]" : ""}`;
-    if (days && !/^\d+$/.test(days)) return "Хоног тоо байх ёстой, жишээ нь: /approve 12345 30";
+    const [id, ...opts] = arg.split(/\s+/);
+    if (!/^\d+$/.test(id || "")) return `Хэрэглээ: ${cmd} ID${cmd === "/approve" ? " [хоног] [unlimited]" : ""}`;
+    const days = opts.find((o) => /^\d+$/.test(o));
+    const plan = opts.some((o) => /^(unlimited|хязгааргүй)$/i.test(o)) ? "unlimited" : opts.some((o) => /^basic$/i.test(o)) ? "basic" : undefined;
+    if (opts.some((o) => !/^\d+$/.test(o) && !/^(unlimited|хязгааргүй|basic)$/i.test(o))) {
+      return "Жишээ: /approve 12345 30 (30 хоног) эсвэл /approve 12345 30 unlimited";
+    }
     try {
-      const u = await setUserAccess({ fetch, store, env, chatId: id, now,
+      const u = await setUserAccess({ fetch, store, env, chatId: id, now, plan: cmd === "/approve" ? plan : undefined,
         status: cmd === "/approve" ? "active" : "blocked",
         expiresAt: cmd === "/approve" ? (days ? new Date(now + Number(days) * 864e5).toISOString() : null) : undefined });
       return cmd === "/approve"
-        ? `✅ Эрх нээлээ: ${userLabel(u)}${u.expiresAt ? ` (${fmtDate(u.expiresAt)} хүртэл)` : " (хугацаагүй)"}`
+        ? `✅ Эрх нээлээ: ${userLabel(u)} – ${planLabel(env, planOf(u))}${u.expiresAt ? ` (${fmtDate(u.expiresAt)} хүртэл)` : " (хугацаагүй)"}`
         : `⛔ Эрх хаалаа: ${userLabel(u)}`;
     } catch (e) { return e.message; }
   }
@@ -716,18 +772,35 @@ export async function handleUpdate({ update, fetch, store, env, now = Date.now()
     return cmd;
   }
   let players = await loadPlayers(store, env, chatId);
+  const me = owner ? null : (await loadUsers(store))[chatId];
+  const limit = playerLimit(env, chatId, me);
+  const ofLimit = Number.isFinite(limit) ? `/${limit}` : "";
   if (cmd === "/add" && arg) {
-    const added = [];
-    for (const p of parsePlayerList(arg)) if (!findPlayer(players, p.name)) { players.push(p); added.push(p.name); }
-    await savePlayers(store, env, chatId, players);
-    reply = added.length ? "Нэмлээ: " + added.join(", ") : "Аль хэдийн нэмсэн байна.";
+    const added = [], over = [];
+    for (const p of parsePlayerList(arg)) {
+      if (findPlayer(players, p.name)) continue;
+      if (players.length >= limit) { over.push(p.name); continue; }
+      players.push(p); added.push(p.name);
+    }
+    if (added.length) await savePlayers(store, env, chatId, players);
+    reply = added.length ? "Нэмлээ: " + added.join(", ") : over.length ? "" : "Аль хэдийн нэмсэн байна.";
+    if (over.length) {
+      reply += (reply ? "\n\n" : "") + `⚠️ Таны багц ${limit} хүртэл тоглогчтой тул нэмэгдсэнгүй: ${over.join(", ")}\n` +
+        `Хязгааргүй багц: ${PRICE_UNLIMITED(env)} – дэлгэрэнгүй: /plan`;
+    }
   } else if ((cmd === "/remove" || cmd === "/rm") && arg) {
     const p = findPlayer(players, arg);
     if (p) { players = players.filter((x) => x !== p); await savePlayers(store, env, chatId, players); }
     reply = p ? `Хаслаа: ${p.name}` : `Жагсаалтад алга: ${arg}`;
   } else if (cmd === "/list") {
     const names = players.map((p) => p.name + (p.aliases.length ? ` (${p.aliases.join("/")})` : "")).sort();
-    reply = names.length ? `Таны тоглогчид (${names.length}):\n` + names.map((n) => "• " + n).join("\n") : "Тоглогч алга. Нэмэх: /add Нэр";
+    reply = names.length ? `Таны тоглогчид (${names.length}${ofLimit}):\n` + names.map((n) => "• " + n).join("\n") : "Тоглогч алга. Нэмэх: /add Нэр";
+  } else if (cmd === "/plan") {
+    reply = owner ? "Та эзэмшигч тул хязгааргүй." : [
+      `📦 Таны багц: ${planLabel(env, planOf(me))}${me?.expiresAt ? ` – ${fmtDate(me.expiresAt)} хүртэл` : ""}`,
+      `Тоглогч: ${players.length}${ofLimit}`, "", "Багцууд:", ...priceLines(env), "",
+      "Сунгах эсвэл багцаа солих бол:", ...howToPay(env, chatId),
+    ].join("\n");
   } else if (cmd === "/sources") {
     reply = formatSources(await describeSources(store, env, chatId));
   } else if (cmd === "/status") {

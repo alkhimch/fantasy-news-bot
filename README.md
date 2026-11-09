@@ -79,14 +79,16 @@ You manage the player list from Telegram after the first run. It is stored in `d
 
 The Netlify version serves several people from one bot. `TELEGRAM_CHAT_ID` is the owner: always active, and the only one who can open access for others.
 
-1. A customer opens the bot and sends `/start` (or anything). They get the price, your payment details and their ID to put in the transfer description. You get a "🆕 Шинэ хүсэлт" message with their name and ID.
+1. A customer opens the bot and sends `/start` (or anything). A free 7-day trial starts right away (up to 10 players) and you get a "🎁 Туршилт эхэллээ" message. Each Telegram account gets one trial. When it ends, they get the plans, your payment details and their ID to put in the transfer description, and you get a "🆕 Шинэ хүсэлт" message when they write again. With `TRIAL_DAYS=0` there is no trial: step 1 goes straight to the payment details.
 2. When the money arrives, open their access:
-   - on the admin page: send `/admin` to the bot to get its private link. Pick an end date (end of season, 30 or 90 days, no expiry, or any date), then "Эрх нээх". You can also add a note such as when and how they paid.
-   - or in Telegram: `/approve <id>` (no expiry) or `/approve <id> 30` (30 days).
+   - on the admin page: send `/admin` to the bot to get its private link. Pick the plan (10 players or unlimited) and an end date (end of season, 30 or 90 days, no expiry, or any date), then "Эрх нээх". You can also add a note such as when and how they paid. "Сунгах / солих" renews or changes the plan of a paying customer.
+   - or in Telegram: `/approve <id>` (10 players, no expiry), `/approve <id> 30` (30 days) or `/approve <id> 30 unlimited`. Renewing without a plan keeps the current one.
 3. The customer gets "✅ Таны эрх нээгдлээ" and their own private web link. From then on they use every command and the web page with their own players and Bluesky follows.
 4. When the end date passes, the customer and you are told once and their alerts stop. If they write to the bot again, it shows up as a new request. Renew on the admin page ("Сунгах").
 
 Other owner commands: `/users` lists customers, `/block <id>` closes access. Customers can only use the bot in a private chat.
+
+Plans: the trial and the basic plan allow 10 players; the unlimited plan has no limit. `/add`, the web page and alerts all respect the limit (after a downgrade, only the first 10 players on the list get alerts). Customers see their plan, player count and prices with `/plan`. Customers from before plans existed count as basic.
 
 ### Admin login with a password
 
@@ -102,7 +104,10 @@ Environment variables:
 
 | Variable | Example | Notes |
 |---|---|---|
-| `PRICE` | `50,000₮` | Default `50,000₮` |
+| `PRICE_BASIC` | `50,000₮` | Price of the 10-player plan. Default `50,000₮` (or the old `PRICE`) |
+| `PRICE_UNLIMITED` | `150,000₮` | Price of the unlimited plan. Default `150,000₮` |
+| `BASIC_PLAYER_LIMIT` | `10` | Players allowed on the trial and basic plan. Default `10` |
+| `TRIAL_DAYS` | `7` | Length of the free trial. `0` turns it off. Default `7` |
 | `PAYMENT_INFO` | `Хаан банк 5000123456 (Бат)` | Shown to customers who haven't paid. Use `\n` for a new line. |
 | `ADMIN_EMAILS` | `you@mail.mn` | Who can log in to the admin page with a password (needs Supabase) |
 
@@ -123,7 +128,7 @@ The bot's own state (which news was already seen and sent, source health, the NB
 
 Setup:
 1. Create a project at [supabase.com](https://supabase.com) (free plan).
-2. Open **SQL Editor**, paste [supabase/schema.sql](supabase/schema.sql), and run it.
+2. Open **SQL Editor**, paste [supabase/schema.sql](supabase/schema.sql), and run it. A database made before plans existed needs [supabase/2026-11-plans.sql](supabase/2026-11-plans.sql) once, **before** deploying the plans version.
 3. In **Project Settings → API Keys**, copy the Project URL and a **secret** key (`sb_secret_…`, or the legacy `service_role` key). Never use the publishable/anon key. The tables have row-level security with no policies, so only the secret key can read them.
 4. In Netlify, add `SUPABASE_URL` and `SUPABASE_SECRET_KEY` (mark it secret), then trigger a deploy.
 
