@@ -164,3 +164,20 @@ test("single-user state is carried over: no repeat alerts after the upgrade", as
   const st2 = await w.store.get("state");
   assert.ok(!("sentContent" in st2) && st2.sentBy["42"].length > 0);
 });
+
+test("admin password-login sessions: signed, 30 days, revoked by removing the email", () => {
+  const e = { ...env, ADMIN_EMAILS: "Owner@Mail.mn, second@mail.mn" };
+  assert.ok(core.isAdminEmail(e, " owner@mail.MN ")); assert.ok(!core.isAdminEmail(e, "x@mail.mn"));
+  const now = Date.parse("2026-11-09T00:00:00Z");
+  const t = core.adminSession(e, "owner@mail.mn", now);
+  assert.ok(core.isAdminSession(e, t, now + 29 * 864e5));
+  assert.ok(!core.isAdminSession(e, t, now + 31 * 864e5), "expired");
+  assert.ok(!core.isAdminSession({ ...e, ADMIN_EMAILS: "second@mail.mn" }, t, now), "email removed");
+  assert.ok(!core.isAdminSession({ ...e, TELEGRAM_BOT_TOKEN: "other" }, t, now), "other token");
+  const [, body, sig] = t.split(".");
+  const forged = Buffer.from(JSON.stringify({ e: "owner@mail.mn", exp: now + 999 * 864e5 })).toString("base64url");
+  assert.ok(!core.isAdminSession(e, `s.${forged}.${sig}`, now), "body can't be changed");
+  assert.ok(core.isAdmin(e, core.adminKey(e), now) && core.isAdmin(e, t, now), "link key and session both work");
+  assert.ok(!core.isAdmin(e, core.webKey(e), now) && !core.isAdmin(e, null, now));
+  assert.ok(body.length > 10);
+});

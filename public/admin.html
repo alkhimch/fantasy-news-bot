@@ -43,6 +43,10 @@
   .hint { color: var(--muted); font-size: 14px; padding: 8px 2px; }
   .lock { text-align: center; padding: 40px 10px; }
   .lock code { background: var(--chip); padding: 2px 6px; border-radius: 6px; }
+  .login { display: flex; flex-direction: column; gap: 10px; max-width: 320px; margin: 0 auto 16px; text-align: left; }
+  .login input { width: 100%; }
+  .login .err { color: var(--bad); font-size: 14px; min-height: 1em; }
+  .top { display: flex; justify-content: space-between; align-items: center; gap: 10px; }
   .status { position: fixed; left: 50%; bottom: 16px; transform: translateX(-50%); background: var(--card); border: 1px solid var(--line);
             border-radius: 999px; padding: 6px 14px; font-size: 13px; box-shadow: 0 4px 16px rgba(0,0,0,.12); display: none; }
   .status.show { display: block; }
@@ -52,12 +56,21 @@
 </head>
 <body>
 <main>
-  <h1>👥 Хэрэглэгчид</h1>
+  <div class="top">
+    <h1>👥 Хэрэглэгчид</h1>
+    <button id="logout" hidden>Гарах</button>
+  </div>
   <div class="sub" id="summary">Ачаалж байна…</div>
 
   <section id="locked" class="card lock" hidden>
-    <p><b>Админ линк хэрэгтэй.</b></p>
-    <p>Telegram дээр bot-доо <code>/admin</code> гэж бичээд ирсэн линкээр нээнэ үү.</p>
+    <form class="login" id="login">
+      <b>Админ нэвтрэх</b>
+      <input id="email" type="email" autocomplete="username" placeholder="И-мэйл" required>
+      <input id="password" type="password" autocomplete="current-password" placeholder="Нууц үг" required>
+      <button class="primary" type="submit" id="loginBtn">Нэвтрэх</button>
+      <div class="err" id="loginErr" role="alert"></div>
+    </form>
+    <p class="sub">Эсвэл Telegram дээр bot-доо <code>/admin</code> гэж бичээд ирсэн линкээр нээнэ үү.</p>
   </section>
 
   <div id="app" hidden>
@@ -89,9 +102,27 @@
   };
 
   function lock() {
+    k = null;
     try { localStorage.removeItem("fnbAdminKey"); } catch (e) {}
-    $("app").hidden = true; $("locked").hidden = false; $("summary").textContent = "";
+    $("app").hidden = true; $("logout").hidden = true; $("locked").hidden = false; $("summary").textContent = "";
   }
+
+  $("login").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    $("loginErr").textContent = ""; $("loginBtn").disabled = true;
+    try {
+      const res = await fetch("/api/admin/login", { method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: $("email").value, password: $("password").value }) });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || res.status);
+      k = data.token;
+      try { localStorage.setItem("fnbAdminKey", k); } catch (e) {}
+      $("password").value = ""; $("locked").hidden = true;
+      start();
+    } catch (err) { $("loginErr").textContent = err.message; }
+    $("loginBtn").disabled = false;
+  });
+  $("logout").addEventListener("click", lock);
 
   function flash(text, err) {
     const s = $("status");
@@ -195,7 +226,7 @@
     try { users = await api("/api/admin/users"); }
     catch (e) { if (e.message !== "unauthorized") $("summary").textContent = "Ачаалж чадсангүй: " + e.message; return; }
     if (!users.some((u) => u.status === "pending")) filter = "all";
-    $("app").hidden = false;
+    $("app").hidden = false; $("logout").hidden = false;
     render();
   }
   start();

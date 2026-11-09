@@ -91,6 +91,22 @@ export function supabaseStore({ url, key, fetch, ownerId, fallback }) {
   };
 }
 
+// Supabase Auth email + password check, server side. Returns the user's email or throws a message
+// for the login form.
+export async function passwordSignIn({ url, key, fetch, email, password }) {
+  const res = await fetch(apiBase(url).replace(/rest\/v1\/$/, "auth/v1/token?grant_type=password"), {
+    method: "POST",
+    headers: { apikey: key, "Content-Type": "application/json" },
+    body: JSON.stringify({ email, password }),
+    signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (res.status === 400) throw new Error("Буруу и-мэйл эсвэл нууц үг.");
+  if (res.status === 429) throw new Error("Хэт олон оролдлого. Хэсэг хүлээгээд дахин оролдоно уу.");
+  if (!res.ok || !data.user?.email) throw new Error(`Supabase Auth: HTTP ${res.status} ${data.msg || data.error_description || data.message || ""}`.trim());
+  return data.user.email;
+}
+
 // One-time copy of customer data from Blobs. Never overwrites what Supabase already has.
 export async function copyToSupabase(from, to) {
   const users = (await from.get("users", { type: "json" })) || {};

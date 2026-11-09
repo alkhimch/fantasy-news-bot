@@ -88,12 +88,23 @@ The Netlify version serves several people from one bot. `TELEGRAM_CHAT_ID` is th
 
 Other owner commands: `/users` lists customers, `/block <id>` closes access. Customers can only use the bot in a private chat.
 
+### Admin login with a password
+
+With Supabase set up (see [Storage](#storage-supabase)), the admin page also has an email + password login. The `/admin` link keeps working as a backup.
+
+1. In Supabase, open **Authentication → Users → Add user → Create new user**. Enter an email and password, and tick **Auto Confirm User**. The email doesn't have to be a real mailbox.
+2. In Supabase, open **Authentication → Sign In / Providers** and turn off **Allow new users to sign up**.
+3. In Netlify, add `ADMIN_EMAILS` = that email (comma separated for more than one), then redeploy.
+
+Supabase checks the password. Only emails listed in `ADMIN_EMAILS` get in, even if someone else has a Supabase account. A login lasts 30 days; "Гарах" signs out. Removing an email from `ADMIN_EMAILS` (and redeploying) ends its sessions.
+
 Environment variables:
 
 | Variable | Example | Notes |
 |---|---|---|
 | `PRICE` | `50,000₮` | Default `50,000₮` |
 | `PAYMENT_INFO` | `Хаан банк 5000123456 (Бат)` | Shown to customers who haven't paid. Use `\n` for a new line. |
+| `ADMIN_EMAILS` | `you@mail.mn` | Who can log in to the admin page with a password (needs Supabase) |
 
 The news sources are fetched once for everyone, and each user is checked against their own list. ESPN player feeds are fetched for up to 200 different players across all users.
 

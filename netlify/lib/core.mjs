@@ -290,6 +290,27 @@ export const adminKey = (env) => sha1("fnb-admin:" + env.TELEGRAM_BOT_TOKEN).sli
 export const isAdminKey = (env, key) => sameText(key, adminKey(env));
 export const adminLink = (siteUrl, env) => `${siteUrl}/admin.html?key=${adminKey(env)}`;
 
+// Admin page password login: Supabase Auth checks the password, then we hand out a signed
+// session "s.<base64url {e, exp}>.<sig>". The email is re-checked against ADMIN_EMAILS on every call,
+// so removing it there signs that person out.
+const ADMIN_SESSION_MS = 30 * 864e5;
+const adminEmails = (env) => (env.ADMIN_EMAILS || "").split(",").map((e) => e.trim().toLowerCase()).filter(Boolean);
+export const isAdminEmail = (env, email) => adminEmails(env).includes(String(email || "").trim().toLowerCase());
+export function adminSession(env, email, now = Date.now()) {
+  const body = Buffer.from(JSON.stringify({ e: String(email).trim().toLowerCase(), exp: now + ADMIN_SESSION_MS })).toString("base64url");
+  return `s.${body}.${sign(env, "admin-session:" + body)}`;
+}
+export function isAdminSession(env, token, now = Date.now()) {
+  const m = String(token ?? "").match(/^s\.([A-Za-z0-9_-]+)\.([0-9a-f]{24})$/);
+  if (!m || !sameText(m[2], sign(env, "admin-session:" + m[1]))) return false;
+  try {
+    const { e, exp } = JSON.parse(Buffer.from(m[1], "base64url").toString());
+    return exp > now && isAdminEmail(env, e);
+  } catch { return false; }
+}
+// admin page: the /admin link key or a password-login session
+export const isAdmin = (env, key, now) => isAdminKey(env, key) || isAdminSession(env, key, now);
+
 export const webhookSecret = (env) => sha1("fnb-webhook:" + env.TELEGRAM_BOT_TOKEN).slice(0, 32);
 
 export function formatItem(item, hits) {

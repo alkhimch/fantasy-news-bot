@@ -1,10 +1,13 @@
 // JSON API for the web pages. Player-picker calls need the user's key from /web;
-// /api/admin/* needs the owner's admin key from /admin.
+// /api/admin/* needs the owner's admin key from /admin or a session from /api/admin/login.
 import {
-  describeSources, getRoster, isActive, isAdminKey, isOwner, listUsers, loadFollows, loadPlayers, loadUsers,
-  sanitizePlayers, saveFollowsFromWeb, savePlayers, setUserAccess, userFromKey,
+  adminSession, describeSources, getRoster, isActive, isAdmin, isAdminEmail, isOwner, listUsers, loadFollows, loadPlayers,
+  loadUsers, sanitizePlayers, saveFollowsFromWeb, savePlayers, setUserAccess, userFromKey,
 } from "../lib/core.mjs";
 import { openStore } from "../lib/store.mjs";
+import { passwordSignIn, supabaseKey } from "../lib/supabase.mjs";
+
+const BAD_LOGIN = "Буруу и-мэйл эсвэл нууц үг.";
 
 const json = (data, status = 200) =>
   new Response(JSON.stringify(data), { status, headers: { "Content-Type": "application/json", "Cache-Control": "no-store" } });
@@ -15,9 +18,24 @@ export default async (req) => {
   const path = new URL(req.url).pathname.replace(/\/+$/, "");
   const key = req.headers.get("x-key");
   try {
+    if (path === "/api/admin/login" && req.method === "POST") {
+      if (!env.SUPABASE_URL || !supabaseKey(env) || !env.ADMIN_EMAILS) {
+        return json({ error: "Нууц үгээр нэвтрэх тохиргоо хийгдээгүй байна (SUPABASE_URL, SUPABASE_SECRET_KEY, ADMIN_EMAILS). Telegram дээр /admin линкээр орно уу." }, 400);
+      }
+      const { email, password } = await req.json().catch(() => ({}));
+      if (!email || !password) return json({ error: "И-мэйл, нууц үгээ оруулна уу." }, 400);
+      if (!isAdminEmail(env, email)) return json({ error: BAD_LOGIN }, 401); // same answer: don't reveal who is admin
+      try {
+        const verified = await passwordSignIn({ url: env.SUPABASE_URL, key: supabaseKey(env), fetch, email: String(email).trim(), password: String(password) });
+        if (!isAdminEmail(env, verified)) return json({ error: BAD_LOGIN }, 401);
+        return json({ token: adminSession(env, verified), email: verified.toLowerCase() });
+      } catch (e) {
+        return json({ error: e.message }, 401);
+      }
+    }
     const store = await openStore(env);
     if (path.startsWith("/api/admin/")) {
-      if (!isAdminKey(env, key)) return json({ error: "unauthorized" }, 401);
+      if (!isAdmin(env, key)) return json({ error: "unauthorized" }, 401);
       if (path === "/api/admin/users" && req.method === "GET") {
         return json(await listUsers(store, env));
       }

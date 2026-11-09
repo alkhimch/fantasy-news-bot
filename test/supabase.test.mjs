@@ -128,3 +128,17 @@ test("SUPABASE_URL: dashboard link and /rest/v1 are accepted; a web page gives a
   const store = supabaseStore({ url: "https://example.com", key: "k", fetch: html, ownerId: "42", fallback: memStore() });
   await assert.rejects(store.get("users"), /web page, not data: SUPABASE_URL must be https:\/\/<project-id>\.supabase\.co \(got https:\/\/example\.com\/rest\/v1\/\)/);
 });
+
+test("passwordSignIn: Supabase Auth password grant", async () => {
+  const { passwordSignIn } = await import("../netlify/lib/supabase.mjs");
+  let seen;
+  const auth = (status, body) => async (url, opts) => { seen = { url, opts }; return { ok: status < 300, status, json: async () => body }; };
+  const args = { url: "https://supabase.com/dashboard/project/abc123", key: "sb_secret_x", email: "o@mail.mn", password: "pw" };
+  assert.equal(await passwordSignIn({ ...args, fetch: auth(200, { access_token: "j", user: { email: "o@mail.mn" } }) }), "o@mail.mn");
+  assert.equal(seen.url, "https://abc123.supabase.co/auth/v1/token?grant_type=password");
+  assert.equal(seen.opts.headers.apikey, "sb_secret_x");
+  assert.deepEqual(JSON.parse(seen.opts.body), { email: "o@mail.mn", password: "pw" });
+  await assert.rejects(passwordSignIn({ ...args, fetch: auth(400, { error_code: "invalid_credentials" }) }), /Буруу и-мэйл эсвэл нууц үг/);
+  await assert.rejects(passwordSignIn({ ...args, fetch: auth(429, {}) }), /Хэт олон оролдлого/);
+  await assert.rejects(passwordSignIn({ ...args, fetch: auth(401, { message: "Invalid API key" }) }), /Supabase Auth: HTTP 401 Invalid API key/);
+});
