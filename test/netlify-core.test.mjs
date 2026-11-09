@@ -119,3 +119,29 @@ test("User-Agent never contains 'bot' (ESPN returns 403)", async () => {
 test("webhook secret is stable and Telegram-safe", () => {
   assert.match(core.webhookSecret(env), /^[0-9a-f]{32}$/);
 });
+
+test("new bot token: webhook and web link set again; old bot's update ids don't block the new bot", async () => {
+  const w = world(); const store = memStore();
+  const quiet = { log() {}, warn() {}, error() {} };
+  const e1 = { ...env, TELEGRAM_BOT_TOKEN: "111:old" }, e2 = { ...env, TELEGRAM_BOT_TOKEN: "222:new" };
+  await core.runPoll({ fetch: w.fetch, store, env: e1, siteUrl: "https://x.netlify.app", log: quiet });
+  await core.runPoll({ fetch: w.fetch, store, env: e1, siteUrl: "https://x.netlify.app", log: quiet });
+  assert.equal(w.tgCalls.filter((c) => c === "setWebhook").length, 1);
+  const upd = (id, e) => core.handleUpdate({ update: { update_id: id, message: { chat: { id: 42 }, text: "/list" } }, fetch: w.fetch, store, env: e });
+  assert.equal(await upd(900, e1), "/list");
+  assert.equal(await upd(900, e1), "duplicate");
+
+  w.sent.length = 0;
+  await core.runPoll({ fetch: w.fetch, store, env: e2, siteUrl: "https://x.netlify.app", log: quiet });
+  assert.equal(w.tgCalls.filter((c) => c === "setWebhook").length, 2, "webhook registered for the new bot");
+  assert.ok(w.sent[0].includes("/?key=" + core.webKey(e2)), "new web link sent");
+  assert.equal(await upd(5, e2), "/list", "new bot's lower update id is processed");
+  assert.equal(await upd(5, e2), "duplicate");
+});
+
+test("update id saved before bots were tracked doesn't block anything", async () => {
+  const w = world(); const store = memStore();
+  await store.setJSON("tg", { lastUpdateId: 1000 });
+  const r = await core.handleUpdate({ update: { update_id: 7, message: { chat: { id: 42 }, text: "/list" } }, fetch: w.fetch, store, env });
+  assert.equal(r, "/list");
+});

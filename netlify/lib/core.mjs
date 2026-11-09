@@ -264,6 +264,9 @@ export async function tg(fetch, env, method, params) {
   if (!data.ok) throw new Error(`Telegram ${method}: ${data.description || res.status}`);
   return data.result;
 }
+// "123456:ABC..." -> "123456"
+export const botId = (env) => String(env.TELEGRAM_BOT_TOKEN || "").split(":")[0];
+
 export const send = (fetch, env, text, chatId = env.TELEGRAM_CHAT_ID) =>
   tg(fetch, env, "sendMessage", {
     chat_id: chatId, text: text.slice(0, 4096), parse_mode: "HTML", disable_web_page_preview: true,
@@ -444,21 +447,24 @@ const loadState = async (store) =>
 export async function runPoll({ fetch, store, env, now = Date.now(), siteUrl, log = console }) {
   const state = await loadState(store);
 
-  // register Telegram webhook (for instant /commands) once per site URL
-  if (siteUrl && state.webhookUrl !== siteUrl + "/telegram") {
+  // register Telegram webhook (for instant /commands) once per site URL and bot (a new token = a new bot)
+  if (siteUrl && (state.webhookUrl !== siteUrl + "/telegram" || state.webhookBot !== botId(env))) {
     try {
       await tg(fetch, env, "setWebhook", {
         url: siteUrl + "/telegram", secret_token: webhookSecret(env), allowed_updates: ["message"],
       });
       state.webhookUrl = siteUrl + "/telegram";
-      log.log("webhook set to", state.webhookUrl);
+      state.webhookBot = botId(env);
+      log.log("webhook set to", state.webhookUrl, "for bot", state.webhookBot);
     } catch (e) { log.warn("setWebhook failed:", e.message); }
   }
 
-  if (siteUrl && state.webLinkSentFor !== siteUrl) {
+  // web links are derived from the token, so a new bot means a new link
+  if (siteUrl && (state.webLinkSentFor !== siteUrl || state.webLinkBot !== botId(env))) {
     try {
       await send(fetch, env, `⚙️ Тоглогчоо вебээр сонгох:\n${escapeHtml(webLink(siteUrl, env))}\n(Энэ линкийг хэнд ч бүү өг. Дахин авах: /web)`);
       state.webLinkSentFor = siteUrl;
+      state.webLinkBot = botId(env);
     } catch (e) { log.warn("web link send failed:", e.message); }
   }
 
@@ -670,9 +676,11 @@ async function ownerCommand({ fetch, store, env, cmd, arg, now }) {
 
 export async function handleUpdate({ update, fetch, store, env, now = Date.now(), log = console }) {
   // Telegram retries if we're slow; process each update_id only once.
+  // update ids are counted per bot, so after a token change the old bot's last id doesn't apply
+  // (a saved id without a bot is from before this was tracked: can't tell which bot, so start over).
   const tgState = (await store.get("tg", { type: "json" })) || { lastUpdateId: 0 };
-  if (update.update_id <= tgState.lastUpdateId) return "duplicate";
-  await store.setJSON("tg", { lastUpdateId: update.update_id });
+  if (tgState.bot === botId(env) && update.update_id <= tgState.lastUpdateId) return "duplicate";
+  await store.setJSON("tg", { lastUpdateId: update.update_id, bot: botId(env) });
 
   const msg = update.message || {};
   if (msg.chat?.id == null) return "ignored";
